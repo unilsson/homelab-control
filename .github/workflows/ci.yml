@@ -22,8 +22,10 @@ jobs:
           npm run build --prefix backend
       - name: Test Proxmox discovery and LAN snapshots
         run: npm run test --prefix backend
-      - name: Validate LAN exporter shell syntax
-        run: bash -n scripts/update-lanscan.sh
+      - name: Validate LAN host worker and exporter
+        run: |
+          bash -n scripts/update-lanscan.sh
+          python3 -m unittest discover -s scripts -p 'test_*.py' -v
       - name: Install and build frontend
         run: |
           npm install --prefix frontend
@@ -45,3 +47,6 @@ jobs:
           curl -fsS http://127.0.0.1:3199/api/integrations/proxmox | node -e "let b='';process.stdin.on('data',d=>b+=d).on('end',()=>{if(JSON.parse(b).state!=='disabled') process.exit(1)})"
           curl -fsS http://127.0.0.1:3199/api/systems | node -e "let b='';process.stdin.on('data',d=>b+=d).on('end',()=>{if(!Array.isArray(JSON.parse(b))) process.exit(1)})"
           curl -fsS http://127.0.0.1:3199/api/network/lan | node -e "let b='';process.stdin.on('data',d=>b+=d).on('end',()=>{const x=JSON.parse(b);if(x.state!=='missing'||!Array.isArray(x.results))process.exit(1)})"
+          # No host-side worker in CI, so scans must remain disabled.
+          test "$(curl -sS -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:3199/api/network/lan/scan)" = "503"
+          test "$(curl -sS -o /dev/null -w '%{http_code}' -X POST -H 'Origin: https://another.example' http://127.0.0.1:3199/api/network/lan/scan)" = "403"
