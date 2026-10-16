@@ -1,0 +1,12 @@
+[Unit]
+Description=Refresh read-only LAN inventory for Homelab Control
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/Development/homelab-control
+Environment=LANSCAN_NETWORK=192.168.1.0/24
+Environment=LANSCAN_WITH_OPNSENSE=1
+ExecStart=/bin/bash %h/Development/homelab-control/scripts/update-lanscan.sh
+TimeoutStartSec=180
