@@ -1,0 +1,85 @@
+---
+# Run on the development laptop:
+# ansible-playbook -i ansible/inventory.ini ansible/deploy-thinkpad.yml
+#
+# Updates the EXISTING ThinkPad installation from the approved main branch.
+# It does not change .env or SQLite data.
+- name: Deploy Homelab Control on ThinkPad
+  hosts: thinkpad
+  gather_facts: false
+  become: false
+
+  vars:
+    homelab_dir: /home/unilsson/Development/homelab-control
+    homelab_repo: git@github.com:unilsson/homelab-control.git
+    homelab_branch: main
+    homelab_api_port: 3002
+    homelab_web_port: 8080
+
+  tasks:
+    - name: Check that ThinkPad has its local .env configuration
+      ansible.builtin.stat:
+        path: "{{ homelab_dir }}/.env"
+      register: homelab_env
+
+    - name: Refuse deployment without existing local configuration
+      ansible.builtin.assert:
+        that:
+          - homelab_env.stat.isreg | default(false)
+        fail_msg: >-
+          Missing {{ homelab_dir }}/.env. Configure the existing
+          ThinkPad installation before running this deployment.
+
+    - name: Check Docker Compose availability
+      ansible.builtin.command:
+        argv: [docker, compose, version]
+      changed_when: false
+
+    - name: Fetch the latest approved code and switch to main
+      ansible.builtin.git:
+        repo: "{{ homelab_repo }}"
+        dest: "{{ homelab_dir }}"
+        version: "{{ homelab_branch }}"
+        update: true
+        force: false
+      register: homelab_git
+
+    - name: Build and start Docker Compose services
+      ansible.builtin.command:
+        argv: [docker, compose, up, -d, --build]
+        chdir: "{{ homelab_dir }}"
+      register: homelab_compose
+      changed_when: true
+
+    - name: Wait for backend port to open
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: "{{ homelab_api_port }}"
+        timeout: 90
+
+    - name: Verify backend health
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ homelab_api_port }}/api/health"
+        status_code: 200
+        return_content: true
+      register: homelab_health
+      retries: 10
+      delay: 3
+      until: homelab_health.status == 200 and homelab_health.json.status == 'ok'
+
+    - name: Verify dashboard is reachable
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ homelab_web_port }}/"
+        status_code: 200
+      register: homelab_dashboard
+      retries: 10
+      delay: 3
+      until: homelab_dashboard.status == 200
+
+    - name: Report deployed revision
+      ansible.builtin.debug:
+        msg: >-
+          Homelab Control deployed on ThinkPad from {{ homelab_branch }}
+          at commit {{ homelab_git.after | default('unknown') }}.
+          API: http://thinkpad:{{ homelab_api_port }}/api/health
+          Dashboard: http://thinkpad:{{ homelab_web_port }}/
