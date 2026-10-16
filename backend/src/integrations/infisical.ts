@@ -116,7 +116,6 @@ export function getInfisicalSecret(secretName: string): Promise<string> {
         environment: config.environment,
         secretPath: config.secretPath,
         secretName,
-        type: 'shared',
         viewSecretValue: true
       });
       const value = response.secretValue;
