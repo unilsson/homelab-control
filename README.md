@@ -159,8 +159,9 @@ is supported for migration but `tokenSecretRef` is recommended.
 
 ### Infisical: central Proxmox secret management
 
-This homelab already runs self-hosted **Infisical at `https://secrets.ulnihnw.net`**,
-with the **`dev` environment** configured. We use the official Node.js SDK and
+Configure the URL of your self-hosted Infisical installation in a local `.env` file.
+The example below uses a placeholder hostname; use your real URL locally.
+The existing **`dev` environment** can be used for development. We use the official Node.js SDK and
 Machine Identity (Universal Auth), so Proxmox secret values never need to be
 copied into `config/proxmox-instances.json`.
 
@@ -180,7 +181,7 @@ copied into `config/proxmox-instances.json`.
 
 ```dotenv
 PROXMOX_INSTANCES_FILE=/app/config/proxmox-instances.json
-INFISICAL_SITE_URL=https://secrets.ulnihnw.net
+INFISICAL_SITE_URL=https://secrets.example.invalid
 INFISICAL_PROJECT_ID=YOUR_PROJECT_ID
 INFISICAL_ENV=dev
 INFISICAL_SECRET_PATH=/
@@ -212,7 +213,7 @@ metadata, so prefer the mounted file.
 Homelab Control backend
     │ Machine Identity (Client ID + Client Secret)
     ▼
-Infisical https://secrets.ulnihnw.net
+Infisical https://secrets.example.invalid
     │ Resolve PROXMOX_A_TOKEN / PROXMOX_B_TOKEN
     ▼
 Backend memory (never SQLite or the browser)
