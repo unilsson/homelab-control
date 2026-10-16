@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Activity, Boxes, LayoutDashboard, Radar, Settings2, Server, ShieldCheck, TriangleAlert, Clock3, RefreshCw, Cpu, Database, HardDrive, Layers3 } from 'lucide-react';
+import { Activity, Boxes, LayoutDashboard, Radar, Settings2, Server, ShieldCheck, TriangleAlert, Clock3, RefreshCw, Cpu, Database, HardDrive, Layers3, ChevronDown, ChevronUp } from 'lucide-react';
 
 type System = {
   id: number; name: string; type: string; status: string; host: string | null;
@@ -75,6 +75,7 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [apiError, setApiError] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [expandedInstances, setExpandedInstances] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     const controller = new AbortController();
@@ -141,21 +142,53 @@ export default function App() {
           <span><Layers3 size={15}/> {proxmox.guests.filter(g => g.kind === 'lxc').length} LXC</span>
           <span><Activity size={15}/> {guestsRunning} running</span>
         </div>
-        {proxmox.instances.map(instance => <div className="proxmox-instance" key={instance.id}>
-          <div className="instance-title">
-            <div><strong>{instance.name}</strong><span>{instance.id} · {instance.nodes.length} nodes · {instance.guests.length} guests</span></div>
-            <span className={statusClass(instance.state)}>{instance.state}</span>
-          </div>
-          {instance.error && <div className="notice"><TriangleAlert size={17}/><span>{instance.error}</span></div>}
-          {instance.nodes.map(node => <div key={instance.id + ':' + node.name} className="node-block">
-            <div className="node-header"><strong>{node.name}</strong><span className={statusClass(node.status)}>{node.status}</span></div>
-            <div className="node-details"><span>CPU {formatCPU(node.cpu)}</span><span>RAM {formatMemory(node.mem)} / {formatMemory(node.maxmem)}</span></div>
-            {instance.guests.filter(g => g.node === node.name).map(guest => <div className="guest-row" key={instance.id + ':' + guest.kind + ':' + guest.vmid}>
-              <div className="guest-name"><span className="vmid">{guest.vmid}</span><strong>{guest.name}</strong><span className="guest-kind">{guest.kind.toUpperCase()}{guest.template ? ' · template' : ''}</span></div>
-              <div className="guest-metrics"><span>{formatCPU(guest.cpu)}</span><span>{formatMemory(guest.mem)}</span><span className={statusClass(guest.status)}>{guest.status}</span></div>
-            </div>)}
-          </div>)}
-        </div>)}
+        {proxmox.instances.map(instance => {
+          const expanded = Boolean(expandedInstances[instance.id]);
+          const vmCount = instance.guests.filter(g => g.kind === 'qemu').length;
+          const lxcCount = instance.guests.filter(g => g.kind === 'lxc').length;
+          const runningCount = instance.guests.filter(g => g.status === 'running').length;
+          const detailsId = 'proxmox-details-' + instance.id;
+          return <div className="proxmox-instance" key={instance.id}>
+            <div className="instance-overview">
+              <div className="instance-main">
+                <div className="instance-heading">
+                  <Server size={18} aria-hidden="true" />
+                  <strong>{instance.name}</strong>
+                  <span className={statusClass(instance.state)}>{instance.state}</span>
+                </div>
+                <div className="instance-summary">
+                  <span>{instance.nodes.length} nodes</span>
+                  <span>{vmCount} VMs</span>
+                  <span>{lxcCount} LXC</span>
+                  <span>{runningCount} running</span>
+                </div>
+              </div>
+              <button
+                type="button"
+                className="instance-toggle"
+                onClick={() => setExpandedInstances(previous => ({ ...previous, [instance.id]: !previous[instance.id] }))}
+                aria-expanded={expanded}
+                aria-controls={detailsId}
+              >
+                {expanded ? 'Hide workloads' : 'Show workloads'}
+                {expanded ? <ChevronUp size={16} aria-hidden="true" /> : <ChevronDown size={16} aria-hidden="true" />}
+              </button>
+            </div>
+            {instance.error && <div className="notice"><TriangleAlert size={17}/><span>{instance.error}</span></div>}
+            <div className="instance-details" id={detailsId} hidden={!expanded}>
+              {instance.nodes.length === 0
+                ? <div className="empty">No nodes available from this Proxmox server.</div>
+                : instance.nodes.map(node => <div key={instance.id + ':' + node.name} className="node-block">
+                  <div className="node-header"><strong>{node.name}</strong><span className={statusClass(node.status)}>{node.status}</span></div>
+                  <div className="node-details"><span>CPU {formatCPU(node.cpu)}</span><span>RAM {formatMemory(node.mem)} / {formatMemory(node.maxmem)}</span></div>
+                  {instance.guests.filter(g => g.node === node.name).map(guest => <div className="guest-row" key={instance.id + ':' + guest.kind + ':' + guest.vmid}>
+                    <div className="guest-name"><span className="vmid">{guest.vmid}</span><strong>{guest.name}</strong><span className="guest-kind">{guest.kind.toUpperCase()}{guest.template ? ' · template' : ''}</span></div>
+                    <div className="guest-metrics"><span>{formatCPU(guest.cpu)}</span><span>{formatMemory(guest.mem)}</span><span className={statusClass(guest.status)}>{guest.status}</span></div>
+                  </div>)}
+                </div>)}
+            </div>
+          </div>;
+        })}
       </>}
   </section>;
 
@@ -178,7 +211,7 @@ export default function App() {
           <div className="card"><div className="card-heading"><TriangleAlert size={18}/> RECENT ALERTS</div><div className="metric amber">{alerts}</div><div className="card-foot">Warning or critical events</div></div>
         </div>
         {proxmoxPanel}
-        <section className="panel"><div className="panel-title"><h2>Registered systems</h2><button className="text-action" onClick={() => setPage('Systems')} type="button">View all →</button></div>{systemRows}</section>
+        <section className="panel"><div className="panel-title"><h2>Registered systems</h2><button className="text-action" onClick={() => setPage('Systems')} type="button">View all →</button></div><p className="panel-copy muted">{systems.length} systems registered. Open Systems to see the full list.</p></section>
         <section className="panel"><h2>Recent events</h2>{events.length === 0 ? <div className="empty">No events recorded yet.</div> : events.slice(0, 5).map(e => <div className="row" key={e.id}><strong>{e.message}</strong><span>{e.severity} · {e.created_at}</span></div>)}</section>
       </> : page === 'Systems' ? <><section className="panel"><h2>Discovered systems</h2>{systemRows}</section>{proxmoxPanel}</> :
       page === 'Integrations' ? <> <section className="panel">
