@@ -126,7 +126,7 @@ export function enqueueLanScan(dir = scanDataDir()): Promise<ScanRequestResponse
     }
     // Keep a cooldown even if a scan fails, to prevent repeated probing of the LAN.
     const existing = parseRequest(await jsonFile(paths(dir).request));
-    const lastRequest = existing?.requestedAt;
+    const lastRequest = existing?.requestedAt ?? info.requestedAt;
     if (lastRequest && Date.now() - Date.parse(lastRequest) < manualCooldown) {
       return { httpStatus: 429, scan: { ...info, message: 'Wait at least 90 seconds between manual scans.' } };
     }
