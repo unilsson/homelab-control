@@ -4,6 +4,7 @@ import { db } from './database.js';
 import { getProxmoxInventory } from './integrations/proxmox.js';
 import { getInfisicalStatus } from './integrations/infisical.js';
 import { readLanInventory } from './integrations/lanscan.js';
+import { enqueueLanScan } from './integrations/lanscan-scan.js';
 
 const app = express();
 app.disable('x-powered-by');
@@ -35,6 +36,35 @@ app.get('/api/integrations/proxmox', async (_req, res, next) => {
 app.get('/api/network/lan', async (_req, res, next) => {
   try { res.json(await readLanInventory()); }
   catch (error) { next(error); }
+});
+
+// Queue only a fixed host-side scan; never execute OS commands in Docker.
+// No authentication exists yet: reject cross-site browser requests and rate-limit
+// all manual requests. Keep both web and backend ports restricted to trusted LAN.
+app.post('/api/network/lan/scan', async (req, res, next) => {
+  const fetchSite = req.get('sec-fetch-site');
+  if (fetchSite && fetchSite !== 'same-origin' && fetchSite !== 'none') {
+    res.status(403).json({ error: 'Cross-site scan requests are not allowed.' });
+    return;
+  }
+  const origin = req.get('origin');
+  if (origin) {
+    try {
+      const url = new URL(origin);
+      if ((url.protocol !== 'http:' && url.protocol !== 'https:') ||
+          url.hostname.toLowerCase() !== req.hostname.toLowerCase()) {
+        res.status(403).json({ error: 'Cross-origin scan requests are not allowed.' });
+        return;
+      }
+    } catch {
+      res.status(403).json({ error: 'Invalid request origin.' });
+      return;
+    }
+  }
+  try {
+    const result = await enqueueLanScan();
+    res.status(result.httpStatus).json(result.scan);
+  } catch (error) { next(error); }
 });
 
 app.get('/api/events', (_req, res) => {
