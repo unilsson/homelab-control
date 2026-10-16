@@ -62,3 +62,40 @@
 /* Compact dashboard summary; detailed Proxmox inventory has its own page. */
 .virtualization-overview{display:flex;align-items:center;flex-wrap:wrap;gap:12px 20px;color:#a5b2c5;font-size:12px}
 .virtualization-overview .status{margin-right:4px}
+
+/* Sprint 3A: LAN address inventory */
+.lan-panel .panel-title h2{display:flex;align-items:center;gap:9px}
+.lan-panel .panel-title h2 svg{color:#a5b4fc}
+.lan-scan-time{display:flex;align-items:center;gap:9px;margin:0 0 16px}
+.lan-summary{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:10px;margin:16px 0 24px}
+.lan-summary>div{display:flex;flex-direction:column;gap:6px;background:#1c2532;border:1px solid #303c4d;border-radius:9px;padding:14px 11px}
+.lan-summary strong{font-size:25px;color:#e6eefb;letter-spacing:-1px}
+.lan-summary span{color:#91a1b8;font-size:11px}
+.lan-toolbar{display:flex;align-items:center;justify-content:space-between;gap:15px;flex-wrap:wrap;margin-bottom:16px}
+.lan-filters{display:flex;align-items:center;flex-wrap:wrap;gap:7px}
+.lan-filter{background:#1d2633;color:#a5b2c5;border:1px solid #303b4c;border-radius:7px;padding:8px 11px;font-size:12px;cursor:pointer}
+.lan-filter:hover,.lan-filter.active{background:#283555;color:#e0e7ff;border-color:#818cf8}
+.lan-filter:focus-visible,.lan-search:focus-within{outline:2px solid #a5b4fc;outline-offset:2px}
+.lan-search{display:flex;align-items:center;gap:10px;max-width:350px;min-width:240px;flex:1;background:#1a2330;border:1px solid #374354;border-radius:8px;padding:9px 12px;color:#8e9eb5}
+.lan-search input{min-width:0;width:100%;border:0;outline:0;background:transparent;color:#e7eaf2;font-size:12px}
+.lan-search input::placeholder{color:#7f90a8}
+.lan-row-count{color:#8999b0;font-size:12px;margin:0 0 10px}
+.lan-table-scroll{border:1px solid #2c3645;border-radius:10px;overflow:auto;max-height:640px}
+.lan-table{border-collapse:separate;border-spacing:0;min-width:780px;width:100%;font-size:12px;text-align:left}
+.lan-table th{position:sticky;top:0;z-index:1;background:#202a38;color:#a6b6ca;font-size:11px;letter-spacing:.5px;padding:13px 12px;white-space:nowrap}
+.lan-table td{padding:11px 12px;border-top:1px solid #283342;color:#bdc9db;vertical-align:middle}
+.lan-table tr:hover td{background:#1a2635}
+.lan-table .lan-ip{display:flex;align-items:center;gap:9px;font:12px ui-monospace,SFMono-Regular,Consolas,monospace;color:#dce7fa;white-space:nowrap}
+.lan-table .lan-ip svg{color:#7788ae}
+.lan-table .lan-mac{font:11px ui-monospace,SFMono-Regular,Consolas,monospace;overflow-wrap:anywhere}
+.lan-state{display:inline-flex;border:1px solid #3a4557;border-radius:5px;padding:4px 7px;font-weight:800;font-size:10px;letter-spacing:.6px;text-transform:uppercase;white-space:nowrap;background:#283140;color:#a4b2c4}
+.lan-state-used{background:#16352f;color:#6ee7b7;border-color:#285e50}
+.lan-state-free{background:#1b2b43;color:#9db9ef;border-color:#344e75}
+.lan-state-leased{background:#2b2b4e;color:#c4b5fd;border-color:#514778}
+.lan-state-reserved{background:#41331e;color:#fbbf24;border-color:#69522b}
+.lan-state-conflict{background:#3a222f;color:#fda4af;border-color:#663442}
+.lan-no-results{text-align:center;color:#8390a4!important;padding:25px!important}
+.lan-disclaimer{font-size:11px;line-height:1.7;color:#8390a4;margin:17px 0 0}
+.sr-only{position:absolute;width:1px;height:1px;margin:-1px;padding:0;border:0;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap}
+@media(max-width:1050px){.lan-summary{grid-template-columns:repeat(4,minmax(0,1fr))}}
+@media(max-width:600px){.lan-summary{grid-template-columns:repeat(2,minmax(0,1fr))}.lan-toolbar{align-items:stretch}.lan-search{max-width:none;min-width:0}}
