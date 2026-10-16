@@ -3,7 +3,8 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, rename, unlink, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { promisify } from 'node:util';
-import { networkSpec, parseLanSnapshot } from './lanscan.js';
+import { networkSpec, parseLanSnapshot, mergeOpnsenseLeases } from './lanscan.js';
+import { fetchOpnsenseLeases, type DhcpLease } from './opnsense.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -27,6 +28,7 @@ type ScannerOptions = {
   snapshotPath: string;
   command: string;
   withOpnsense: boolean;
+  getOpnsenseLeases: () => Promise<DhcpLease[]>;
   execute: Execute;
   now: () => number;
 };
@@ -44,6 +46,7 @@ const defaultOptions: ScannerOptions = {
   snapshotPath: process.env.LANSCAN_SNAPSHOT_FILE?.trim() || '/app/data/lanscan.json',
   command: '/opt/lanscan/bin/lanscan',
   withOpnsense: process.env.LANSCAN_WITH_OPNSENSE === 'true',
+  getOpnsenseLeases: fetchOpnsenseLeases,
   execute: (binary, args, options) => execFileAsync(binary, args, options),
   now: Date.now
 };
@@ -93,19 +96,24 @@ export class LanScanner {
   }
 
   private async run(): Promise<void> {
-    const { command, network, withOpnsense, snapshotPath, execute, now } = this.options;
+    const { command, network, withOpnsense, getOpnsenseLeases, snapshotPath, execute, now } = this.options;
     try {
       // Reject invalid network settings before executing any ARP traffic.
       networkSpec(network);
-      const args = [network, '--all', '--json', ...(withOpnsense ? ['--opnsense'] : [])];
+      // Let the Python CLI do ARP/DNS discovery. OPNsense secrets remain in
+      // Node memory and are NEVER passed to a child process or written to disk.
+      const args = [network, '--all', '--json'];
       const { stdout } = await execute(command, args, {
         timeout: limits.timeoutMs, maxBuffer: limits.maxBufferBytes
       });
       if (Buffer.byteLength(stdout, 'utf8') > limits.maxBufferBytes) {
         throw new Error('Scan result exceeds size limit');
       }
-      const document: unknown = JSON.parse(stdout);
-      parseLanSnapshot(document, network);
+      const arpDocument: unknown = JSON.parse(stdout);
+      parseLanSnapshot(arpDocument, network);
+      const document = withOpnsense
+        ? mergeOpnsenseLeases(arpDocument, network, await getOpnsenseLeases())
+        : arpDocument;
       const dir = dirname(snapshotPath);
       await mkdir(dir, { recursive: true });
       const tempPath = snapshotPath + '.tmp-' + randomUUID();
