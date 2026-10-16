@@ -2,7 +2,18 @@ import https from 'node:https';
 import { readFileSync } from 'node:fs';
 import { db } from '../database.js';
 
+export type ProxmoxInstanceConfig = {
+  id: string;
+  name: string;
+  url: string;
+  tokenId: string;
+  tokenSecret: string;
+  caPath?: string;
+};
+
 export type ProxmoxNode = {
+  instanceId: string;
+  instanceName: string;
   name: string;
   status: string;
   cpu: number | null;
@@ -12,6 +23,8 @@ export type ProxmoxNode = {
   uptime: number | null;
 };
 export type ProxmoxGuest = {
+  instanceId: string;
+  instanceName: string;
   vmid: number;
   name: string;
   node: string;
@@ -22,10 +35,20 @@ export type ProxmoxGuest = {
   maxmem: number | null;
   template: boolean;
 };
+export type ProxmoxInstance = {
+  id: string;
+  name: string;
+  state: 'online' | 'partial' | 'error';
+  checkedAt: string;
+  nodes: ProxmoxNode[];
+  guests: ProxmoxGuest[];
+  error?: string;
+};
 export type ProxmoxInventory = {
   configured: boolean;
   state: 'disabled' | 'online' | 'partial' | 'error';
   checkedAt: string | null;
+  instances: ProxmoxInstance[];
   nodes: ProxmoxNode[];
   guests: ProxmoxGuest[];
   error?: string;
@@ -39,35 +62,110 @@ let cached: ProxmoxInventory | null = null;
 let cacheTime = 0;
 let pending: Promise<ProxmoxInventory> | null = null;
 
-function configured(): boolean {
-  return Boolean(process.env.PROXMOX_URL?.trim() && process.env.PROXMOX_TOKEN_ID?.trim() && process.env.PROXMOX_TOKEN_SECRET?.trim());
+function requiredString(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function validUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' &&
+      !url.username && !url.password && url.pathname === '/' &&
+      !url.search && !url.hash && !url.hostname.includes('%');
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Credentials are read server-side only and NEVER included in API responses.
+ * Configuration is stored outside Git in a bind-mounted local JSON file.
+ * The old single-host environment variables remain supported for migration.
+ */
+export function loadProxmoxConfigs(): ProxmoxInstanceConfig[] {
+  const path = process.env.PROXMOX_INSTANCES_FILE?.trim();
+  let configs: unknown;
+  if (path) {
+    try {
+      configs = JSON.parse(readFileSync(path, 'utf8')) as unknown;
+    } catch {
+      throw new Error('Cannot read Proxmox instance configuration (check local JSON file).');
+    }
+  } else if (
+    requiredString(process.env.PROXMOX_URL) ||
+    requiredString(process.env.PROXMOX_TOKEN_ID) ||
+    requiredString(process.env.PROXMOX_TOKEN_SECRET)
+  ) {
+    configs = [{
+      id: 'primary',
+      name: 'Proxmox',
+      url: process.env.PROXMOX_URL,
+      tokenId: process.env.PROXMOX_TOKEN_ID,
+      tokenSecret: process.env.PROXMOX_TOKEN_SECRET,
+      caPath: process.env.PROXMOX_CA_PATH || undefined
+    }];
+  } else {
+    return [];
+  }
+
+  if (!Array.isArray(configs) || configs.length === 0 || configs.length > 20) {
+    throw new Error('Proxmox configuration must contain between 1 and 20 instances.');
+  }
+
+  const ids = new Set<string>();
+  return configs.map((entry: unknown, index) => {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      throw new Error('Invalid Proxmox instance at index ' + index);
+    }
+    const item = entry as Record<string, unknown>;
+    if (!requiredString(item.id) || !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(item.id)) {
+      throw new Error('Invalid Proxmox instance ID at index ' + index);
+    }
+    if (ids.has(item.id)) throw new Error('Duplicate Proxmox instance ID: ' + item.id);
+    ids.add(item.id);
+    if (!requiredString(item.name) || item.name.length > 120) {
+      throw new Error('Invalid Proxmox instance name for ' + item.id);
+    }
+    if (!requiredString(item.url) || !validUrl(item.url)) {
+      throw new Error('Invalid Proxmox URL for ' + item.id + ' (HTTPS origin required)');
+    }
+    if (!requiredString(item.tokenId) || !requiredString(item.tokenSecret)) {
+      throw new Error('Missing Proxmox API credentials for ' + item.id);
+    }
+    if (item.caPath !== undefined && item.caPath !== null && !requiredString(item.caPath)) {
+      throw new Error('Invalid Proxmox CA path for ' + item.id);
+    }
+    return {
+      id: item.id,
+      name: item.name.trim(),
+      url: item.url.trim(),
+      tokenId: item.tokenId.trim(),
+      tokenSecret: item.tokenSecret.trim(),
+      ...(requiredString(item.caPath) ? { caPath: item.caPath.trim() } : {})
+    };
+  });
 }
 
 function nullable(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
-// HTTPS only, no automatic redirects: API tokens must never be forwarded to a redirect target.
-function requestData<T>(path: string): Promise<T> {
+// HTTPS only, no redirect handling (to avoid forwarding tokens).
+function requestData<T>(instance: ProxmoxInstanceConfig, path: string): Promise<T> {
   return new Promise((resolve, reject) => {
-    const endpoint = new URL(process.env.PROXMOX_URL!.trim());
-    if (endpoint.protocol !== 'https:' || endpoint.username || endpoint.password || endpoint.pathname !== '/' || endpoint.search || endpoint.hash) {
-      reject(new Error('PROXMOX_URL must be an HTTPS origin such as https://pve.example:8006'));
-      return;
-    }
+    const endpoint = new URL(instance.url);
     const url = new URL('/api2/json' + path, endpoint);
-    const caPath = process.env.PROXMOX_CA_PATH?.trim();
     let ca: Buffer | undefined;
     try {
-      if (caPath) ca = readFileSync(caPath);
+      if (instance.caPath) ca = readFileSync(instance.caPath);
     } catch {
-      reject(new Error('Cannot read the configured Proxmox CA certificate'));
+      reject(new Error('Cannot read trusted Proxmox CA certificate.'));
       return;
     }
     const req = https.request(url, {
       method: 'GET',
       headers: {
-        Authorization: 'PVEAPIToken=' + process.env.PROXMOX_TOKEN_ID!.trim() + '=' + process.env.PROXMOX_TOKEN_SECRET!.trim(),
+        Authorization: 'PVEAPIToken=' + instance.tokenId + '=' + instance.tokenSecret,
         Accept: 'application/json'
       },
       ...(ca ? { ca } : {}),
@@ -76,7 +174,7 @@ function requestData<T>(path: string): Promise<T> {
       const status = res.statusCode ?? 0;
       if (status === 401 || status === 403) {
         res.resume();
-        reject(new Error('Proxmox rejected the API token or its read permissions (' + status + ')'));
+        reject(new Error('Proxmox rejected API token or read permissions (HTTP ' + status + ')'));
         return;
       }
       if (status !== 200) {
@@ -94,7 +192,7 @@ function requestData<T>(path: string): Promise<T> {
         }
         chunks.push(chunk);
       });
-      res.on('error', reject);
+      res.on('error', () => reject(new Error('Proxmox response stream interrupted')));
       res.on('end', () => {
         try {
           const payload: unknown = JSON.parse(Buffer.concat(chunks).toString('utf8'));
@@ -108,110 +206,152 @@ function requestData<T>(path: string): Promise<T> {
         }
       });
     });
-    req.on('timeout', () => req.destroy(new Error('Proxmox API timed out')));
-    req.on('error', error => {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code?.startsWith('CERT_') || code?.includes('CERT') || code === 'UNABLE_TO_VERIFY_LEAF_SIGNATURE' || code === 'DEPTH_ZERO_SELF_SIGNED_CERT') {
-        reject(new Error('Proxmox TLS validation failed. Configure a trusted hostname and PROXMOX_CA_PATH.'));
-      } else if (code === 'ECONNREFUSED' || code === 'ENOTFOUND' || code === 'ETIMEDOUT' || code === 'EHOSTUNREACH') {
-        reject(new Error('Cannot reach Proxmox (' + code + ')'));
+    req.on('timeout', () => req.destroy(new Error('timeout')));
+    req.on('error', (error: NodeJS.ErrnoException) => {
+      // Hide raw Node/TLS messages; they may reveal internal addresses.
+      const code = error.code ?? '';
+      if (code.startsWith('CERT_') || code.includes('CERT') ||
+          code === 'UNABLE_TO_VERIFY_LEAF_SIGNATURE' || code === 'DEPTH_ZERO_SELF_SIGNED_CERT' ||
+          code === 'ERR_TLS_CERT_ALTNAME_INVALID') {
+        reject(new Error('Proxmox TLS validation failed (hostname or CA certificate)'));
+      } else if (error.message === 'timeout') {
+        reject(new Error('Proxmox API timed out'));
       } else {
-        reject(error.message === 'Proxmox API timed out' ? error : new Error('Proxmox HTTPS request failed'));
+        reject(new Error('Cannot reach Proxmox HTTPS API'));
       }
     });
     req.end();
   });
 }
 
-function synchronizeInventory(inventory: ProxmoxInventory): void {
-  if (inventory.state !== 'online' && inventory.state !== 'partial') return;
-
-  const get = db.prepare('SELECT id, status FROM systems WHERE source = ? AND external_id = ?');
+function synchronizeInstances(instances: ProxmoxInstance[]): void {
+  const lookup = db.prepare('SELECT id, status FROM systems WHERE source = ? AND external_id = ?');
   const insert = db.prepare('INSERT INTO systems (name, type, status, host, source, external_id, last_seen) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)');
   const update = db.prepare('UPDATE systems SET name = ?, type = ?, status = ?, host = ?, last_seen = CURRENT_TIMESTAMP WHERE id = ?');
   const addEvent = db.prepare('INSERT INTO events (system_id, severity, message) VALUES (?, ?, ?)');
+  // Do not label unreachable hosts as offline. Their last known inventory remains
+  // in SQLite, but status becomes unknown until polling succeeds again.
+  const markUnknown = db.prepare("UPDATE systems SET status = 'unknown' WHERE source = 'proxmox' AND substr(external_id, 1, ?) = ? AND status != 'unknown'");
 
-  const upsert = (id: string, name: string, type: string, status: string, host: string) => {
-    const current = get.get('proxmox', id) as { id: number; status: string } | undefined;
+  const upsert = (key: string, name: string, type: string, status: string, host: string) => {
+    const current = lookup.get('proxmox', key) as { id: number; status: string } | undefined;
     if (!current) {
-      insert.run(name, type, status, host, 'proxmox', id);
+      insert.run(name, type, status, host, 'proxmox', key);
       return;
     }
     update.run(name, type, status, host, current.id);
-    if (current.status !== status) {
-      const severity = status === 'offline' ? 'warning' : 'info';
-      addEvent.run(current.id, severity, type + ' ' + name + ' changed status: ' + current.status + ' → ' + status);
+    // Suppress noisy "recovered" events after connection loss.
+    if (current.status !== 'unknown' && current.status !== status) {
+      addEvent.run(current.id, status === 'offline' ? 'warning' : 'info',
+        type + ' ' + name + ' changed status: ' + current.status + ' → ' + status);
     }
   };
 
   db.transaction(() => {
-    for (const node of inventory.nodes) {
-      upsert('node:' + node.name, node.name, 'Proxmox node', node.status === 'online' ? 'online' : 'offline', node.name);
-    }
-    for (const guest of inventory.guests) {
-      // A stopped guest is not necessarily an alert.
-      const status = guest.status === 'running' ? 'online' : guest.status === 'stopped' ? 'stopped' : 'unknown';
-      upsert(guest.kind + ':' + guest.vmid, guest.name, guest.kind === 'qemu' ? 'Virtual machine' : 'LXC container', status, guest.node);
+    for (const instance of instances) {
+      const prefix = instance.id + ':';
+      if (instance.state === 'error') {
+        markUnknown.run(prefix.length, prefix);
+        continue;
+      }
+      for (const node of instance.nodes) {
+        upsert(prefix + 'node:' + node.name,
+          node.name, 'Proxmox node', node.status === 'online' ? 'online' : 'offline',
+          instance.name);
+      }
+      for (const guest of instance.guests) {
+        const status = guest.status === 'running' ? 'online' :
+          guest.status === 'stopped' ? 'stopped' : 'unknown';
+        upsert(prefix + guest.kind + ':' + guest.vmid,
+          guest.name, guest.kind === 'qemu' ? 'Virtual machine' : 'LXC container',
+          status, instance.name + ' / ' + guest.node);
+      }
     }
   })();
 }
 
-async function discover(): Promise<ProxmoxInventory> {
-  if (!configured()) return { configured: false, state: 'disabled', checkedAt: null, nodes: [], guests: [] };
-
+async function discoverInstance(instance: ProxmoxInstanceConfig): Promise<ProxmoxInstance> {
+  const checkedAt = new Date().toISOString();
   try {
-    const rawNodes = await requestData<PveNode[]>('/nodes');
+    const rawNodes = await requestData<PveNode[]>(instance, '/nodes');
     if (!Array.isArray(rawNodes)) throw new Error('Unexpected Proxmox node response');
-
-    const nodes: ProxmoxNode[] = rawNodes.filter(n => typeof n.node === 'string').map(n => ({
-      name: n.node,
-      status: n.status ?? 'unknown',
-      cpu: nullable(n.cpu),
-      maxcpu: nullable(n.maxcpu),
-      mem: nullable(n.mem),
-      maxmem: nullable(n.maxmem),
-      uptime: nullable(n.uptime)
-    }));
-    const activeNodes = nodes.filter(n => n.status === 'online');
-
-    const tasks = activeNodes.flatMap(node => (['qemu', 'lxc'] as const).map(async kind => {
-      const data = await requestData<PveGuest[]>('/nodes/' + encodeURIComponent(node.name) + '/' + kind);
-      if (!Array.isArray(data)) throw new Error('Unexpected Proxmox guest response');
-      return data.filter(g => typeof g.vmid === 'number').map(g => ({
-        vmid: g.vmid,
-        name: g.name || kind.toUpperCase() + ' ' + g.vmid,
-        node: node.name,
-        kind,
-        status: g.status || 'unknown',
-        cpu: nullable(g.cpu),
-        mem: nullable(g.mem),
-        maxmem: nullable(g.maxmem),
-        template: Boolean(g.template)
+    const nodes: ProxmoxNode[] = rawNodes
+      .filter(n => n && typeof n.node === 'string')
+      .map(n => ({
+        instanceId: instance.id, instanceName: instance.name,
+        name: n.node, status: n.status ?? 'unknown', cpu: nullable(n.cpu),
+        maxcpu: nullable(n.maxcpu), mem: nullable(n.mem),
+        maxmem: nullable(n.maxmem), uptime: nullable(n.uptime)
+      }));
+    const active = nodes.filter(n => n.status === 'online');
+    const requests = active.flatMap(node => (['qemu', 'lxc'] as const).map(async kind => {
+      const guests = await requestData<PveGuest[]>(instance, '/nodes/' + encodeURIComponent(node.name) + '/' + kind);
+      if (!Array.isArray(guests)) throw new Error('Unexpected Proxmox guest response');
+      return guests.filter(g => g && typeof g.vmid === 'number').map(g => ({
+        instanceId: instance.id, instanceName: instance.name,
+        vmid: g.vmid, name: g.name || kind.toUpperCase() + ' ' + g.vmid,
+        node: node.name, kind, status: g.status ?? 'unknown',
+        cpu: nullable(g.cpu), mem: nullable(g.mem),
+        maxmem: nullable(g.maxmem), template: Boolean(g.template)
       }));
     }));
-    const outcomes = await Promise.allSettled(tasks);
-    const guests = outcomes.filter((r): r is PromiseFulfilledResult<ProxmoxGuest[]> => r.status === 'fulfilled').flatMap(r => r.value);
-    const failures = outcomes.filter(r => r.status === 'rejected').length;
-    const inventory: ProxmoxInventory = {
-      configured: true,
-      state: failures ? 'partial' : 'online',
-      checkedAt: new Date().toISOString(),
-      nodes,
-      guests: guests.sort((a, b) => a.vmid - b.vmid),
-      ...(failures ? { error: failures + ' guest lists could not be read (check Proxmox permissions).' } : {})
+    const results = await Promise.allSettled(requests);
+    const guests: ProxmoxGuest[] = results
+      .filter((r): r is PromiseFulfilledResult<ProxmoxGuest[]> => r.status === 'fulfilled')
+      .flatMap(r => r.value).sort((a, b) => a.vmid - b.vmid);
+    const errors = results.filter(r => r.status === 'rejected').length;
+    return {
+      id: instance.id, name: instance.name,
+      state: errors ? 'partial' : 'online', checkedAt, nodes, guests,
+      ...(errors ? { error: errors + ' guest lists could not be read (check permissions).' } : {})
     };
-    synchronizeInventory(inventory);
-    return inventory;
   } catch (error) {
     return {
-      configured: true,
-      state: 'error',
-      checkedAt: new Date().toISOString(),
-      nodes: [],
-      guests: [],
+      id: instance.id, name: instance.name, state: 'error', checkedAt,
+      nodes: [], guests: [],
       error: error instanceof Error ? error.message : 'Proxmox discovery failed'
     };
   }
+}
+
+async function discover(): Promise<ProxmoxInventory> {
+  const checkedAt = new Date().toISOString();
+  let configs: ProxmoxInstanceConfig[];
+  try {
+    configs = loadProxmoxConfigs();
+  } catch (error) {
+    return {
+      configured: true, state: 'error', checkedAt,
+      instances: [], nodes: [], guests: [],
+      error: error instanceof Error ? error.message : 'Invalid Proxmox configuration'
+    };
+  }
+  if (!configs.length) {
+    return { configured: false, state: 'disabled', checkedAt: null, instances: [], nodes: [], guests: [] };
+  }
+
+  // Each endpoint is polled independently; failure of one cannot hide the other.
+  const instances = await Promise.all(configs.map(discoverInstance));
+  try {
+    synchronizeInstances(instances);
+  } catch {
+    return {
+      configured: true, state: 'error', checkedAt,
+      instances, nodes: instances.flatMap(i => i.nodes),
+      guests: instances.flatMap(i => i.guests),
+      error: 'Could not save discovered inventory to SQLite'
+    };
+  }
+  const healthy = instances.filter(i => i.state === 'online').length;
+  const failed = instances.filter(i => i.state === 'error').length;
+  return {
+    configured: true,
+    state: failed === instances.length ? 'error' : failed > 0 || healthy !== instances.length ? 'partial' : 'online',
+    checkedAt,
+    instances,
+    nodes: instances.flatMap(i => i.nodes),
+    guests: instances.flatMap(i => i.guests)
+  };
 }
 
 export function getProxmoxInventory(): Promise<ProxmoxInventory> {
