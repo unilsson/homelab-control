@@ -7,4 +7,4 @@ if [ "$#" -ne 2 ] || [ "$1" != "arp-scan" ] || [ "$2" != "${LANSCAN_NETWORK:-192
   echo "Only the configured LAN subnet may be scanned" >&2
   exit 2
 fi
-exec /usr/bin/arp-scan "$2"
+exec /usr/local/bin/arp-scan "$2"
