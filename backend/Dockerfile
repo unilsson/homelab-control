@@ -27,8 +27,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* \
     && ln -s "$(command -v arp-scan)" /usr/local/bin/arp-scan \
     && setcap cap_net_raw+ep "$(readlink -f /usr/local/bin/arp-scan)" \
-    && mkdir -p /app/data /home/node/.config/lanscan \
-    && ln -s /app/secrets/lanscan-config.toml /home/node/.config/lanscan/config.toml
+    && mkdir -p /app/data
 COPY --from=scanner /opt/lanscan /opt/lanscan
 COPY --from=build /app/package*.json ./
 COPY --from=build /app/node_modules ./node_modules
@@ -37,7 +36,7 @@ COPY --from=build /app/dist ./dist
 # executes only the fixed requested subnet with arp-scan's file capability.
 COPY docker/sudo /usr/local/bin/sudo
 RUN chmod 0755 /usr/local/bin/sudo \
-    && chown -R node:node /app /home/node/.config
+    && chown -R node:node /app
 USER node
 EXPOSE 3001
 CMD ["node", "dist/index.js"]
