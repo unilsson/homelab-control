@@ -18,7 +18,15 @@ type LanInventory = {
     total: number; occupied: number; used: number; free: number;
     leased: number; reserved: number; conflicts: number;
   } | null;
-  results: LanAddress[]; message?: string;
+  results: LanAddress[]; scan: ScanInfo; message?: string;
+};
+type ScanInfo = {
+  state: 'unavailable' | 'idle' | 'queued' | 'running' | 'completed' | 'failed';
+  available: boolean;
+  requestedAt: string | null;
+  startedAt: string | null;
+  finishedAt: string | null;
+  message?: string;
 };
 type Filter = 'all' | LanStatus;
 
@@ -33,7 +41,8 @@ const filters: { key: Filter; label: string }[] = [
 
 const emptyInventory: LanInventory = {
   network: '192.168.1.0/24', state: 'missing', scannedAt: null,
-  summary: null, results: []
+  summary: null, results: [],
+  scan: { state: 'unavailable', available: false, requestedAt: null, startedAt: null, finishedAt: null }
 };
 
 function displayedMac(row: LanAddress): string {
@@ -53,14 +62,19 @@ export default function LanPage({ refreshKey }: { refreshKey: number }) {
   const [filter, setFilter] = useState<Filter>('all');
   const [pending, setPending] = useState(true);
   const [fetchError, setFetchError] = useState(false);
+  const [requesting, setRequesting] = useState(false);
+  const [requestError, setRequestError] = useState<string | null>(null);
+  const [scanRefresh, setScanRefresh] = useState(0);
 
   useEffect(() => {
     let controller: AbortController | null = null;
+    let timeout: ReturnType<typeof setTimeout> | null = null;
     let mounted = true;
     const load = async () => {
       controller?.abort();
       const active = new AbortController();
       controller = active;
+      let delay = 30_000;
       try {
         const response = await fetch('/api/network/lan', { signal: active.signal });
         if (!response.ok) throw new Error('LAN API unavailable');
@@ -68,16 +82,52 @@ export default function LanPage({ refreshKey }: { refreshKey: number }) {
         if (!mounted || active.signal.aborted) return;
         setInventory(data);
         setFetchError(false);
+        delay = data.scan?.state === 'queued' || data.scan?.state === 'running' ? 3_000 : 30_000;
       } catch {
         if (mounted && !active.signal.aborted) setFetchError(true);
+        delay = 10_000;
       } finally {
-        if (mounted && !active.signal.aborted) setPending(false);
+        if (mounted) {
+          setPending(false);
+          timeout = setTimeout(() => { void load(); }, delay);
+        }
       }
     };
     void load();
-    const timer = setInterval(() => { void load(); }, 30_000);
-    return () => { mounted = false; controller?.abort(); clearInterval(timer); };
-  }, [refreshKey]);
+    return () => {
+      mounted = false;
+      controller?.abort();
+      if (timeout) clearTimeout(timeout);
+    };
+  }, [refreshKey, scanRefresh]);
+
+  const scanBusy = inventory.scan.state === 'queued' || inventory.scan.state === 'running';
+  const scanStatus = inventory.scan.state === 'queued' ? 'Queued (starts within about a minute)'
+    : inventory.scan.state === 'running' ? 'Scanning the LAN…'
+    : inventory.scan.state === 'completed' ? 'Last scan completed'
+    : inventory.scan.state === 'failed' ? 'Last scan failed'
+    : inventory.scan.state === 'unavailable' ? 'Host scanner unavailable'
+    : 'Ready to scan';
+
+  const scanNow = async () => {
+    setRequesting(true);
+    setRequestError(null);
+    try {
+      const response = await fetch('/api/network/lan/scan', { method: 'POST' });
+      const data = await response.json() as ScanInfo & { error?: string };
+      if (!response.ok) {
+        setRequestError(data.message || data.error || 'Could not request a LAN scan.');
+        setScanRefresh(value => value + 1);
+        return;
+      }
+      setInventory(previous => ({ ...previous, scan: data }));
+      setScanRefresh(value => value + 1);
+    } catch {
+      setRequestError('Could not connect to the LAN scan API.');
+    } finally {
+      setRequesting(false);
+    }
+  };
 
   const displayed = useMemo(() => {
     const needle = search.trim().toLowerCase();
@@ -103,12 +153,30 @@ export default function LanPage({ refreshKey }: { refreshKey: number }) {
       <div><h2><Network size={17} aria-hidden="true" /> LAN address inventory</h2>
         <p>{inventory.network} · read-only ARP / DNS / OPNsense DHCP snapshot</p>
       </div>
-      <span className={'status ' + (inventory.state === 'online' ? 'good' : inventory.state === 'stale' ? 'caution' : 'neutral')}>{inventory.state}</span>
+      <div className="lan-header-actions">
+        <button type="button" className="instance-toggle lan-scan-button"
+          disabled={requesting || scanBusy || !inventory.scan.available}
+          onClick={() => { void scanNow(); }}
+          title={!inventory.scan.available ? 'Enable the host-side homelab-lanscan timer to scan now' : undefined}>
+          <RefreshCw size={15} aria-hidden="true" className={inventory.scan.state === 'running' ? 'lan-spin' : ''} />
+          {requesting ? 'Requesting…' : scanBusy ? 'Scan pending…' : 'Scan now'}
+        </button>
+        <span className={'status ' + (inventory.state === 'online' ? 'good' : inventory.state === 'stale' ? 'caution' : 'neutral')}>{inventory.state}</span>
+      </div>
     </div>
 
     <p className="panel-copy muted lan-scan-time">
-      <RefreshCw size={14} aria-hidden="true" /> Last scan: {scannedAt}. Page refreshes every 30 seconds.
+      <RefreshCw size={14} aria-hidden="true" /> Last result: {scannedAt}. {scanStatus}.
     </p>
+    <div className="lan-scan-status" role="status" aria-live="polite">
+      {scanBusy && <span>{inventory.scan.state === 'queued'
+        ? 'The host worker will pick up the request shortly.'
+        : 'ARP and DHCP discovery are in progress. The table shows the previous scan until completion.'}</span>}
+      {!inventory.scan.available && <span>To enable Scan now, start the host-side homelab-lanscan timer.</span>}
+    </div>
+    {requestError && <div className="notice"><AlertTriangle size={17} /><span>{requestError}</span></div>}
+    {inventory.scan.state === 'failed' && inventory.scan.message &&
+      <div className="notice"><AlertTriangle size={17} /><span>{inventory.scan.message}</span></div>}
     {fetchError && <div className="notice"><AlertTriangle size={17} /> Could not refresh LAN data. The displayed data may be outdated.</div>}
     {inventory.message && <div className="notice"><AlertTriangle size={17} /><span>{inventory.message}</span></div>}
     {pending && !summary && <div className="empty">Loading LAN inventory…</div>}
