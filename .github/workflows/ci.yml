@@ -20,8 +20,10 @@ jobs:
         run: |
           npm install --prefix backend
           npm run build --prefix backend
-      - name: Test multi-Proxmox discovery
+      - name: Test Proxmox discovery and LAN snapshots
         run: npm run test --prefix backend
+      - name: Validate LAN exporter shell syntax
+        run: bash -n scripts/update-lanscan.sh
       - name: Install and build frontend
         run: |
           npm install --prefix frontend
@@ -42,3 +44,4 @@ jobs:
           curl -fsS http://127.0.0.1:3199/api/health | node -e "let b='';process.stdin.on('data',d=>b+=d).on('end',()=>{if(JSON.parse(b).status!=='ok') process.exit(1)})"
           curl -fsS http://127.0.0.1:3199/api/integrations/proxmox | node -e "let b='';process.stdin.on('data',d=>b+=d).on('end',()=>{if(JSON.parse(b).state!=='disabled') process.exit(1)})"
           curl -fsS http://127.0.0.1:3199/api/systems | node -e "let b='';process.stdin.on('data',d=>b+=d).on('end',()=>{if(!Array.isArray(JSON.parse(b))) process.exit(1)})"
+          curl -fsS http://127.0.0.1:3199/api/network/lan | node -e "let b='';process.stdin.on('data',d=>b+=d).on('end',()=>{const x=JSON.parse(b);if(x.state!=='missing'||!Array.isArray(x.results))process.exit(1)})"
