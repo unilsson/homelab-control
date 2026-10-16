@@ -197,14 +197,19 @@ export function requestOpnsenseLeases(config: OpnsenseConfig, key: string, secre
 }
 
 /** No OPNsense API credentials are persisted. Only the backend sees Infisical values. */
-export async function fetchOpnsenseLeases(): Promise<DhcpLease[]> {
+export async function fetchOpnsenseLeases(deps: {
+  secretGetter?: (name: string) => Promise<string>;
+  request?: (config: OpnsenseConfig, key: string, secret: string) => Promise<DhcpLease[]>;
+} = {}): Promise<DhcpLease[]> {
   try {
     const config = loadOpnsenseConfig();
+    const getSecret = deps.secretGetter ?? getInfisicalSecret;
     const [key, secret] = await Promise.all([
-      getInfisicalSecret(config.apiKeyRef),
-      getInfisicalSecret(config.apiSecretRef)
+      getSecret(config.apiKeyRef),
+      getSecret(config.apiSecretRef)
     ]);
-    const leases = await requestOpnsenseLeases(config, key, secret);
+    const request = deps.request ?? requestOpnsenseLeases;
+    const leases = await request(config, key, secret);
     lastState = 'online';
     checkedAt = new Date().toISOString();
     return leases;
