@@ -58,3 +58,7 @@
 .integration-row .integration-error{color:#fda4af}
 .panel-copy code{font-size:12px;color:#c4b5fd;overflow-wrap:anywhere}
 @media(max-width:730px){.instance-overview,.integration-row{flex-wrap:wrap}.instance-toggle{width:100%}}
+
+/* Compact dashboard summary; detailed Proxmox inventory has its own page. */
+.virtualization-overview{display:flex;align-items:center;flex-wrap:wrap;gap:12px 20px;color:#a5b2c5;font-size:12px}
+.virtualization-overview .status{margin-right:4px}
