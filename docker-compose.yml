@@ -2,12 +2,21 @@ services:
   backend:
     build: ./backend
     restart: unless-stopped
+    # ARP broadcasts cannot reach the real LAN through Docker's bridge.
+    # Only NET_RAW is added; Node still runs as the non-root 'node' user.
+    network_mode: host
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_RAW
     environment:
       NODE_ENV: production
-      PORT: 3001
+      PORT: ${BACKEND_PORT:-3001}
       DATABASE_PATH: /app/data/homelab.sqlite
       LANSCAN_SNAPSHOT_FILE: /app/data/lanscan.json
       LANSCAN_NETWORK: ${LANSCAN_NETWORK:-192.168.1.0/24}
+      LANSCAN_ENABLED: "true"
+      LANSCAN_WITH_OPNSENSE: ${LANSCAN_WITH_OPNSENSE:-false}
       PROXMOX_INSTANCES_FILE: ${PROXMOX_INSTANCES_FILE:-}
       PROXMOX_URL: ${PROXMOX_URL:-}
       PROXMOX_TOKEN_ID: ${PROXMOX_TOKEN_ID:-}
@@ -26,16 +35,19 @@ services:
       - ./certs:/app/certs:ro
       - ./config:/app/config:ro
       - ./secrets:/app/secrets:ro
-    ports:
-      - "${BACKEND_PORT:-3001}:3001"
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/api/health').then(r => {if(!r.ok) process.exit(1)}).catch(() => process.exit(1))"]
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:' + process.env.PORT + '/api/health').then(r => {if(!r.ok) process.exit(1)}).catch(() => process.exit(1))"]
       interval: 30s
       timeout: 5s
       retries: 3
   frontend:
     build: ./frontend
     restart: unless-stopped
+    environment:
+      BACKEND_PORT: ${BACKEND_PORT:-3001}
+    # Frontend remains bridged; proxy connections reach the host-network backend.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "${FRONTEND_PORT:-8080}:80"
     depends_on:
