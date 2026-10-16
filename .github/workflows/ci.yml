@@ -1,0 +1,42 @@
+name: Build and smoke test
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install and build backend
+        run: |
+          npm install --prefix backend
+          npm run build --prefix backend
+      - name: Install and build frontend
+        run: |
+          npm install --prefix frontend
+          npm run build --prefix frontend
+      - name: Smoke test API without Proxmox credentials
+        env:
+          DATABASE_PATH: ${{ runner.temp }}/homelab-smoke.sqlite
+          PORT: '3199'
+        run: |
+          set -euo pipefail
+          node backend/dist/index.js &
+          for attempt in $(seq 1 20); do
+            if curl -fsS http://127.0.0.1:3199/api/health > /dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:3199/api/health | node -e "let b='';process.stdin.on('data',d=>b+=d).on('end',()=>{if(JSON.parse(b).status!=='ok') process.exit(1)})"
+          curl -fsS http://127.0.0.1:3199/api/integrations/proxmox | node -e "let b='';process.stdin.on('data',d=>b+=d).on('end',()=>{if(JSON.parse(b).state!=='disabled') process.exit(1)})"
+          curl -fsS http://127.0.0.1:3199/api/systems | node -e "let b='';process.stdin.on('data',d=>b+=d).on('end',()=>{if(!Array.isArray(JSON.parse(b))) process.exit(1)})"
