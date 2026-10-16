@@ -1,6 +1,4 @@
 import { readFile, stat } from 'node:fs/promises';
-import { dirname } from 'node:path';
-import { getLanScanInfo, type LanScanInfo } from './lanscan-scan.js';
 
 export type LanStatus = 'used' | 'free' | 'leased' | 'reserved' | 'conflict';
 export type LanDevice = { mac: string; vendor: string };
@@ -19,7 +17,7 @@ export type LanSummary = {
 export type LanInventory = {
   network: string; state: 'online' | 'stale' | 'missing' | 'error';
   scannedAt: string | null; summary: LanSummary | null;
-  results: LanAddress[]; scan: LanScanInfo; message?: string;
+  results: LanAddress[]; message?: string;
 };
 
 const validStatuses = new Set<LanStatus>(['used', 'free', 'leased', 'reserved', 'conflict']);
@@ -34,7 +32,7 @@ function ipv4Number(value: unknown): number | null {
   return (((parts[0] * 0x1000000) + (parts[1] << 16) + (parts[2] << 8) + parts[3]) >>> 0);
 }
 
-function networkSpec(value: string): { network: string; first: number; last: number; total: number } {
+export function networkSpec(value: string): { network: string; first: number; last: number; total: number } {
   const match = /^(.*)\/(\d{1,2})$/.exec(value);
   const address = match ? ipv4Number(match[1]) : null;
   const prefix = match ? Number(match[2]) : NaN;
@@ -126,9 +124,8 @@ export async function readLanInventory(
   filePath = process.env.LANSCAN_SNAPSHOT_FILE?.trim() || '/app/data/lanscan.json',
   network = process.env.LANSCAN_NETWORK?.trim() || defaultNetwork
 ): Promise<LanInventory> {
-  const scan = await getLanScanInfo(dirname(filePath));
   const empty = (state: 'missing' | 'error', message: string): LanInventory =>
-    ({ network, state, scannedAt: null, summary: null, results: [], scan, message });
+    ({ network, state, scannedAt: null, summary: null, results: [], message });
   try {
     const file = await stat(filePath);
     if (!file.isFile() || file.size > maxSnapshotBytes || file.size === 0) {
@@ -138,13 +135,13 @@ export async function readLanInventory(
     const parsed = parseLanSnapshot(JSON.parse(source) as unknown, network);
     const stale = Date.now() - file.mtimeMs > staleAfterMs;
     return {
-      ...parsed, scan, state: stale ? 'stale' : 'online', scannedAt: file.mtime.toISOString(),
+      ...parsed, state: stale ? 'stale' : 'online', scannedAt: file.mtime.toISOString(),
       ...(stale ? { message: 'LAN scan is older than 30 minutes; addresses may have changed.' } : {})
     };
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      return empty('missing', 'No LAN scan available. Run scripts/update-lanscan.sh on the host.');
+      return empty('missing', 'No LAN scan available yet. Click Scan now to scan the LAN.');
     }
-    return empty('error', 'Cannot read or validate LAN scan snapshot. Check the scan log and configuration.');
+    return empty('error', 'Cannot read or validate LAN scan snapshot. Click Scan now or check backend logs.');
   }
 }
