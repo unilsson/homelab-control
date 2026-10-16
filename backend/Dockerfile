@@ -25,7 +25,8 @@ ENV PATH="/opt/lanscan/bin:${PATH}"
 RUN apt-get update && apt-get install -y --no-install-recommends \
       python3 arp-scan libcap2-bin ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
-    && setcap cap_net_raw+ep /usr/bin/arp-scan \
+    && ln -s "$(command -v arp-scan)" /usr/local/bin/arp-scan \
+    && setcap cap_net_raw+ep "$(readlink -f /usr/local/bin/arp-scan)" \
     && mkdir -p /app/data /home/node/.config/lanscan \
     && ln -s /app/secrets/lanscan-config.toml /home/node/.config/lanscan/config.toml
 COPY --from=scanner /opt/lanscan /opt/lanscan
