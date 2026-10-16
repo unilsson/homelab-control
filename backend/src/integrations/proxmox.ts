@@ -1,15 +1,19 @@
 import https from 'node:https';
 import { readFileSync } from 'node:fs';
 import { db } from '../database.js';
+import { getInfisicalSecret } from './infisical.js';
 
 export type ProxmoxInstanceConfig = {
   id: string;
   name: string;
   url: string;
   tokenId: string;
-  tokenSecret: string;
+  tokenSecret?: string;
+  tokenSecretRef?: string;
   caPath?: string;
 };
+
+type ResolvedInstanceConfig = ProxmoxInstanceConfig & { tokenSecret: string };
 
 export type ProxmoxNode = {
   instanceId: string;
@@ -129,8 +133,17 @@ export function loadProxmoxConfigs(): ProxmoxInstanceConfig[] {
     if (!requiredString(item.url) || !validUrl(item.url)) {
       throw new Error('Invalid Proxmox URL for ' + item.id + ' (HTTPS origin required)');
     }
-    if (!requiredString(item.tokenId) || !requiredString(item.tokenSecret)) {
-      throw new Error('Missing Proxmox API credentials for ' + item.id);
+    if (!requiredString(item.tokenId)) {
+      throw new Error('Missing Proxmox token ID for ' + item.id);
+    }
+    // Exactly one credential source: legacy local value OR Infisical reference.
+    const hasLocalSecret = requiredString(item.tokenSecret);
+    const hasReference = requiredString(item.tokenSecretRef);
+    if (hasLocalSecret === hasReference) {
+      throw new Error('Choose exactly one of tokenSecret or tokenSecretRef for ' + item.id);
+    }
+    if (hasReference && !/^[A-Za-z][A-Za-z0-9_]{0,127}$/.test(item.tokenSecretRef as string)) {
+      throw new Error('Invalid Infisical secret reference for ' + item.id);
     }
     if (item.caPath !== undefined && item.caPath !== null && !requiredString(item.caPath)) {
       throw new Error('Invalid Proxmox CA path for ' + item.id);
@@ -140,7 +153,8 @@ export function loadProxmoxConfigs(): ProxmoxInstanceConfig[] {
       name: item.name.trim(),
       url: item.url.trim(),
       tokenId: item.tokenId.trim(),
-      tokenSecret: item.tokenSecret.trim(),
+      ...(requiredString(item.tokenSecret) ? { tokenSecret: item.tokenSecret.trim() } : {}),
+      ...(requiredString(item.tokenSecretRef) ? { tokenSecretRef: item.tokenSecretRef.trim() } : {}),
       ...(requiredString(item.caPath) ? { caPath: item.caPath.trim() } : {})
     };
   });
@@ -151,7 +165,7 @@ function nullable(value: unknown): number | null {
 }
 
 // HTTPS only, no redirect handling (to avoid forwarding tokens).
-function requestData<T>(instance: ProxmoxInstanceConfig, path: string): Promise<T> {
+function requestData<T>(instance: ResolvedInstanceConfig, path: string): Promise<T> {
   return new Promise((resolve, reject) => {
     const endpoint = new URL(instance.url);
     const url = new URL('/api2/json' + path, endpoint);
@@ -270,7 +284,7 @@ function synchronizeInstances(instances: ProxmoxInstance[]): void {
   })();
 }
 
-async function discoverInstance(instance: ProxmoxInstanceConfig): Promise<ProxmoxInstance> {
+async function discoverInstance(instance: ResolvedInstanceConfig): Promise<ProxmoxInstance> {
   const checkedAt = new Date().toISOString();
   try {
     const rawNodes = await requestData<PveNode[]>(instance, '/nodes');
@@ -330,8 +344,25 @@ async function discover(): Promise<ProxmoxInventory> {
     return { configured: false, state: 'disabled', checkedAt: null, instances: [], nodes: [], guests: [] };
   }
 
-  // Each endpoint is polled independently; failure of one cannot hide the other.
-  const instances = await Promise.all(configs.map(discoverInstance));
+  // Credential lookup and Proxmox discovery are isolated per installation.
+  // One missing secret must not prevent the other Proxmox installation loading.
+  const instances = await Promise.all(configs.map(async config => {
+    try {
+      const tokenSecret = config.tokenSecret ??
+        await getInfisicalSecret(config.tokenSecretRef!);
+      return await discoverInstance({ ...config, tokenSecret });
+    } catch {
+      return {
+        id: config.id,
+        name: config.name,
+        state: 'error' as const,
+        checkedAt: new Date().toISOString(),
+        nodes: [],
+        guests: [],
+        error: 'Could not retrieve the Proxmox credential from Infisical.'
+      };
+    }
+  }));
   try {
     synchronizeInstances(instances);
   } catch {
