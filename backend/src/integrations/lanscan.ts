@@ -26,14 +26,14 @@ const defaultNetwork = '192.168.1.0/24';
 const staleAfterMs = 30 * 60 * 1000;
 
 function ipv4Number(value: unknown): number | null {
-  if (typeof value !== 'string' || !/^(0|[1-9][0-9]{0,2})(\\.(0|[1-9][0-9]{0,2})){3}$/.test(value)) return null;
+  if (typeof value !== 'string' || !/^(0|[1-9][0-9]{0,2})(\.(0|[1-9][0-9]{0,2})){3}$/.test(value)) return null;
   const parts = value.split('.').map(Number);
   if (parts.some(part => part > 255)) return null;
   return (((parts[0] * 0x1000000) + (parts[1] << 16) + (parts[2] << 8) + parts[3]) >>> 0);
 }
 
 function networkSpec(value: string): { network: string; first: number; last: number; total: number } {
-  const match = /^(.*)\\/(\\d{1,2})$/.exec(value);
+  const match = /^(.*)\/(\d{1,2})$/.exec(value);
   const address = match ? ipv4Number(match[1]) : null;
   const prefix = match ? Number(match[2]) : NaN;
   // A LAN inventory is deliberately bounded to 4,094 host addresses.
