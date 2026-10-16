@@ -80,9 +80,9 @@
 .lan-search input{min-width:0;width:100%;border:0;outline:0;background:transparent;color:#e7eaf2;font-size:12px}
 .lan-search input::placeholder{color:#7f90a8}
 .lan-row-count{color:#8999b0;font-size:12px;margin:0 0 10px}
-.lan-table-scroll{border:1px solid #2c3645;border-radius:10px;overflow:auto;max-height:640px}
+.lan-table-scroll{border:1px solid #2c3645;border-radius:10px;overflow-x:auto;overflow-y:visible}
 .lan-table{border-collapse:separate;border-spacing:0;min-width:780px;width:100%;font-size:12px;text-align:left}
-.lan-table th{position:sticky;top:0;z-index:1;background:#202a38;color:#a6b6ca;font-size:11px;letter-spacing:.5px;padding:13px 12px;white-space:nowrap}
+.lan-table th{background:#202a38;color:#a6b6ca;font-size:11px;letter-spacing:.5px;padding:13px 12px;white-space:nowrap}
 .lan-table td{padding:11px 12px;border-top:1px solid #283342;color:#bdc9db;vertical-align:middle}
 .lan-table tr:hover td{background:#1a2635}
 .lan-table .lan-ip{display:flex;align-items:center;gap:9px;font:12px ui-monospace,SFMono-Regular,Consolas,monospace;color:#dce7fa;white-space:nowrap}
