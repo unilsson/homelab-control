@@ -105,6 +105,31 @@ test('two independent Proxmox servers have isolated inventories and errors', asy
       { id: 'duplicate', name: 'B', url: 'https://127.0.0.1:8007', tokenId: 'b', tokenSecret: 't' }
     ]));
     assert.throws(() => loadProxmoxConfigs(), /Duplicate Proxmox instance ID/);
+
+    // A secret reference is accepted, but it must not be combined with plaintext.
+    writeFileSync(configPath, JSON.stringify([
+      { id: 'alpha', name: 'Proxmox A', url: 'https://127.0.0.1:' + portA, tokenId: 'monitor@pve!discovery', tokenSecret: 'first-secret', caPath: cert },
+      { id: 'beta', name: 'Proxmox B', url: 'https://127.0.0.1:' + portB, tokenId: 'monitor@pve!discovery', tokenSecretRef: 'PROXMOX_B_TOKEN', caPath: cert }
+    ]));
+    assert.equal(loadProxmoxConfigs()[1].tokenSecretRef, 'PROXMOX_B_TOKEN');
+
+    // Infisical is deliberately not configured in CI. A missing secret only
+    // affects beta; alpha remains available, and tokens never reach the API.
+    const withMissingSecret = await getProxmoxInventory(true);
+    assert.equal(withMissingSecret.state, 'partial');
+    assert.equal(withMissingSecret.instances[0].state, 'online');
+    assert.equal(withMissingSecret.instances[1].state, 'error');
+    assert.equal(withMissingSecret.instances[1].error, 'Could not retrieve the Proxmox credential from Infisical.');
+    assert.ok(!JSON.stringify(withMissingSecret).includes('first-secret'));
+
+    // A config must never ambiguously specify both a local secret and a ref.
+    writeFileSync(configPath, JSON.stringify([{
+      id: 'alpha', name: 'Proxmox A', url: 'https://127.0.0.1:' + portA,
+      tokenId: 'monitor@pve!discovery', tokenSecret: 'unsafe-plaintext',
+      tokenSecretRef: 'PROXMOX_A_TOKEN'
+    }]));
+    assert.throws(() => loadProxmoxConfigs(), /Choose exactly one/);
+
     db.close();
   } finally {
     for (const server of servers) {
