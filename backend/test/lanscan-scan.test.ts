@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { LanScanner } from '../src/integrations/lanscan-scan.js';
-import type { LanInventory } from '../src/integrations/lanscan.js';
+import type { DhcpLease } from '../src/integrations/opnsense.js';
 
 function validDocument(): { schema_version: number; results: Array<Record<string, unknown>> } {
   return {
@@ -18,7 +18,8 @@ function validDocument(): { schema_version: number; results: Array<Record<string
   };
 }
 
-function setup(execute: (binary: string, args: string[], options: { timeout: number; maxBuffer: number }) => Promise<{ stdout: string }>, enabled = true) {
+function setup(execute: (binary: string, args: string[], options: { timeout: number; maxBuffer: number }) => Promise<{ stdout: string }>, enabled = true,
+  getOpnsenseLeases: () => Promise<DhcpLease[]> = async () => []) {
   const dir = mkdtempSync(join(tmpdir(), 'homelab-lan-direct-scan-'));
   const snapshot = join(dir, 'lanscan.json');
   let tick = Date.now();
@@ -28,6 +29,7 @@ function setup(execute: (binary: string, args: string[], options: { timeout: num
     snapshotPath: snapshot,
     command: '/opt/lanscan/bin/lanscan',
     withOpnsense: true,
+    getOpnsenseLeases,
     execute,
     now: () => tick
   });
@@ -62,7 +64,7 @@ test('direct Scan now runs fixed lanscan command and writes validated snapshot',
     assert.equal(snapshot.results.length, 254);
     assert.deepEqual(calls, [{
       binary: '/opt/lanscan/bin/lanscan',
-      args: ['192.168.1.0/24', '--all', '--json', '--opnsense'],
+      args: ['192.168.1.0/24', '--all', '--json'],
       options: { timeout: 150_000, maxBuffer: 4_000_000 }
     }]);
     const limited = t.scanner.requestScan();
@@ -148,6 +150,7 @@ test('scanner rejects invalid network configuration before executing a command',
     enabled: true, network: '8.8.8.8/24',
     snapshotPath: join(dir, 'lanscan.json'),
     command: '/opt/lanscan/bin/lanscan', withOpnsense: false,
+    getOpnsenseLeases: async () => [],
     execute: async () => { calls++; return { stdout: '{}' }; },
     now: Date.now
   });
