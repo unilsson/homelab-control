@@ -3,6 +3,7 @@ import cors from 'cors';
 import { db } from './database.js';
 import { getProxmoxInventory } from './integrations/proxmox.js';
 import { getInfisicalStatus } from './integrations/infisical.js';
+import { getOpnsenseStatus } from './integrations/opnsense.js';
 import { readLanInventory } from './integrations/lanscan.js';
 import { getLanScanInfo, requestLanScan, startLanScanner } from './integrations/lanscan-scan.js';
 
@@ -26,6 +27,11 @@ app.get('/api/systems', async (_req, res, next) => {
 
 app.get('/api/integrations/infisical', (_req, res) => {
   res.json(getInfisicalStatus());
+});
+
+app.get('/api/integrations/opnsense', (_req, res) => {
+  // Only metadata; neither Infisical values nor OPNsense credentials exposed.
+  res.json(getOpnsenseStatus());
 });
 
 app.get('/api/integrations/proxmox', async (_req, res, next) => {
