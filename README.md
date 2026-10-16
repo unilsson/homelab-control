@@ -81,8 +81,8 @@ If `thinkpad` is not resolvable from the laptop, edit `ansible/inventory.ini` an
 ## Sprint 2 — Read-only Proxmox discovery (multi-server)
 
 Sprint 2 discovers **multiple Proxmox installations independently**. Each configured
-connection has its own stable ID, display name, HTTPS origin, read-only API token and
-optional CA certificate. The dashboard groups nodes, QEMU VMs and LXC containers under
+connection has its own stable ID, display name, HTTPS origin, read-only API-token ID
+and optional CA certificate. Token **secrets** are referenced by Infisical key name. The dashboard groups nodes, QEMU VMs and LXC containers under
 their respective Proxmox installation and shows independent connection health.
 
 The API endpoint `GET /api/integrations/proxmox` returns both aggregated arrays
@@ -118,7 +118,7 @@ cp config/proxmox-instances.example.json config/proxmox-instances.json
 nano config/proxmox-instances.json
 ```
 
-Each entry has its own name, address and token; use the example as a template:
+Each entry has its own name, address, token ID and **Infisical secret reference**; use the example as a template:
 
 ```json
 [
@@ -127,7 +127,7 @@ Each entry has its own name, address and token; use the example as a template:
     "name": "Proxmox A",
     "url": "https://proxmox-a.example:8006",
     "tokenId": "monitor@pve!discovery",
-    "tokenSecret": "SECRET_FROM_SERVER_A",
+    "tokenSecretRef": "PROXMOX_A_TOKEN",
     "caPath": "/app/certs/proxmox-a-ca.pem"
   },
   {
@@ -135,7 +135,7 @@ Each entry has its own name, address and token; use the example as a template:
     "name": "Proxmox B",
     "url": "https://proxmox-b.example:8006",
     "tokenId": "monitor@pve!discovery",
-    "tokenSecret": "SECRET_FROM_SERVER_B",
+    "tokenSecretRef": "PROXMOX_B_TOKEN",
     "caPath": "/app/certs/proxmox-b-ca.pem"
   }
 ]
@@ -151,10 +151,97 @@ In the Lenovo's existing local `.env`, add:
 PROXMOX_INSTANCES_FILE=/app/config/proxmox-instances.json
 ```
 
-Keep the existing `FRONTEND_PORT` and `BACKEND_PORT` values. The secret JSON
-file is ignored by `.gitignore` and mounted read-only into the backend
-container. Never use `git add -f` to add it, and do not paste secrets into
-issues, screenshots or logs.
+Keep existing `FRONTEND_PORT` and `BACKEND_PORT` values. This local JSON
+contains endpoint metadata and **references only** (no Proxmox secret values).
+The file is ignored by `.gitignore` and mounted read-only into the backend
+container. Never use `git add -f` to add it. A legacy `tokenSecret` field
+is supported for migration but `tokenSecretRef` is recommended.
+
+### Infisical: central Proxmox secret management
+
+This homelab already runs self-hosted **Infisical at `https://secrets.ulnihnw.net`**,
+with the **`dev` environment** configured. We use the official Node.js SDK and
+Machine Identity (Universal Auth), so Proxmox secret values never need to be
+copied into `config/proxmox-instances.json`.
+
+1. Create (or select) an Infisical project for `homelab-control`. Locate its
+   **Project ID** in Project Settings. Keep using the existing environment slug
+   `dev` on the Lenovo. Use `prod` on ThinkPad only after that environment
+   actually exists and contains its own secrets.
+2. Under the `dev` environment, create two secrets named
+   `PROXMOX_A_TOKEN` and `PROXMOX_B_TOKEN`. Their values are the **token
+   secrets**, not the token IDs. Use folder `/` unless you deliberately choose
+   a different folder.
+3. Create a dedicated **Machine Identity** for Homelab Control using
+   **Universal Auth**. Grant it only permission to read the necessary secrets
+   in this project/environment/path. Store its Client ID and Client Secret
+   locally on the Lenovo; never commit them.
+4. Add these settings to the Lenovo's **existing local** `.env` file:
+
+```dotenv
+PROXMOX_INSTANCES_FILE=/app/config/proxmox-instances.json
+INFISICAL_SITE_URL=https://secrets.ulnihnw.net
+INFISICAL_PROJECT_ID=YOUR_PROJECT_ID
+INFISICAL_ENV=dev
+INFISICAL_SECRET_PATH=/
+INFISICAL_CLIENT_ID=YOUR_MACHINE_IDENTITY_CLIENT_ID
+INFISICAL_CLIENT_SECRET_FILE=/app/secrets/infisical-client-secret
+```
+
+Create the bootstrap secret file on Lenovo:
+
+```bash
+mkdir -p secrets
+umask 077
+${EDITOR:-nano} secrets/infisical-client-secret
+chmod 600 secrets/infisical-client-secret
+```
+
+Paste only the **machine identity Client Secret** into that local file. Make
+sure no trailing whitespace is included; the backend trims surrounding
+whitespace. Do not put it into Git, the example JSON, or chat messages.
+The Docker backend reads the file from its read-only `/app/secrets` mount.
+If UID permissions differ, ensure its non-root `node` user can read the file.
+There is also a backwards-compatible `INFISICAL_CLIENT_SECRET` environment
+option, but it exposes the bootstrap credential through Docker environment
+metadata, so prefer the mounted file.
+
+**Authentication flow:**
+
+```text
+Homelab Control backend
+    │ Machine Identity (Client ID + Client Secret)
+    ▼
+Infisical https://secrets.ulnihnw.net
+    │ Resolve PROXMOX_A_TOKEN / PROXMOX_B_TOKEN
+    ▼
+Backend memory (never SQLite or the browser)
+    │ HTTPS, read-only Proxmox API
+    ├── Proxmox A
+    └── Proxmox B
+```
+
+The backend caches secrets in memory for **5 minutes** to limit Infisical API
+requests and automatically re-reads them for token rotation. If Infisical is
+temporarily unreachable, a previously retrieved value can be used for at most
+**1 hour**. After that, the affected Proxmox connection becomes an error
+until the secret is available again. No disk cache is written.
+
+The Integrations page shows **Infisical status only**, not credential values.
+The read-only endpoint `/api/integrations/infisical` also exposes only
+`configured`, `state`, `lastCheckedAt`, and an optional generic message.
+Proxmox connection errors remain independent.
+
+**TLS:** Both Infisical and Proxmox must have trusted HTTPS certificates.
+Do not disable TLS verification. If your self-hosted Infisical uses an internal
+CA instead of a publicly trusted certificate, mount only the **public CA**
+and configure `NODE_EXTRA_CA_CERTS` for the backend (additional Compose setup
+may be required); never store private keys in the repo.
+
+**Backwards compatibility:** Existing `tokenSecret` entries continue working.
+For new installations use `tokenSecretRef` exclusively. Do not specify both
+fields on the same server. The old single-server environment variables are
+also supported but cannot use Infisical references.
 
 ### TLS certificate trust
 
@@ -180,6 +267,7 @@ insecure TLS. **Never copy the private CA key** to this repository.
 ```bash
 docker compose up -d --build
 curl -s http://localhost:3001/api/integrations/proxmox
+curl -s http://localhost:3001/api/integrations/infisical
 curl -s http://localhost:3001/api/systems
 ```
 
