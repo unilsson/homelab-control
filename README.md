@@ -295,166 +295,142 @@ ready for production, configure it separately on the ThinkPad.
 
 The application itself still has no login and must remain on a trusted LAN.
 
-## Sprint 3A — NETWORK → LAN (lanscan)
+## Sprint 3A — NETWORK → LAN (direct container scanning)
 
-The **NETWORK → LAN** page shows the entire local IPv4 allocation (normally all
-**254** host addresses of `192.168.1.0/24`) in numeric IP order. It includes a
-searchable table and status filters for `USED`, `FREE`, `LEASED`, `RESERVED`
-and `CONFLICT`. Each row shows its IP, hostname, MAC, vendor or DHCP
-description when available. Summary counters show total/occupied/free addresses.
+The **NETWORK → LAN** page shows the entire `192.168.1.0/24` address
+allocation (**254** usable IPv4 addresses) with used/free/leased/reserved/
+conflict status, search and status filters, hostname, MAC and vendor/description.
 
-**Data source:** the separate open-source
-[`unilsson/lanscan`](https://github.com/unilsson/lanscan) CLI, not an
-additional scanner built into Homelab Control. Its versioned
-`lanscan 192.168.1.0/24 --all --opnsense --json` output is saved to the host's
-`data/lanscan.json`. Docker already bind-mounts `./data:/app/data`; the
-backend only **reads** this JSON at `GET /api/network/lan`.
-The JSON contains no OPNsense API credentials. The **Scan now** button uses
-`POST /api/network/lan/scan` to write a fixed, rate-limited request marker;
-the unprivileged **host-side worker** does the actual network scanning.
-Requests are collected within about 1 minute; automatic scans continue every
-15 minutes. The page polls status every 3 seconds while a scan is queued or
-running, and retains the previous snapshot until a new scan succeeds.
-The host worker must be active or **Scan now** is disabled.
+**Scan now runs lanscan directly in Homelab Control's backend container.**
+No host-side installation, queue, Python worker or systemd timer is needed.
+The backend also scans automatically on startup and about every **15 minutes**.
 
-**No Docker host networking,
-NET_RAW, sudo, or OPNsense secrets are needed inside the container.**
+### How Scan now works
 
-`LANSCAN_NETWORK=192.168.1.0/24` in the host's `.env` sets the subnet used by
-the backend validator and Docker. The same subnet must be used by the host
-exporter. The default snapshot path inside Docker is
-`/app/data/lanscan.json`.
+1. The browser sends `POST /api/network/lan/scan` to the backend.
+2. The Node backend starts a *fixed* `lanscan 192.168.1.0/24 --all --json`
+   command (plus `--opnsense` if configured). It does **not** accept a
+   command or subnet from the browser.
+3. While the scan runs, the UI displays **Scanning…**, polls every three
+   seconds and keeps the previous snapshot visible.
+4. The versioned JSON result is strictly validated for **all 254 addresses**
+   and atomically stored in `./data/lanscan.json`. A failed or partial scan
+   cannot overwrite the previous complete snapshot.
+5. The backend returns a completed/failed state and the latest address table.
 
-### Initial local test (Lenovo)
+The API does not block while the scan is in progress. Repeated requests are
+limited to once per 90 seconds; simultaneous scans are rejected with HTTP 409.
 
-Install `lanscan` and `arp-scan` on the host if needed:
-
-```bash
-sudo apt install python3 pipx arp-scan
-pipx install git+https://github.com/unilsson/lanscan.git
-```
-
-If `lanscan` is already installed, use the existing installation.
-The host must actually be connected to `192.168.1.0/24` and must be able
-to send ARP requests on that network.
-
-For the complete `LEASED`/`RESERVED` information, configure the host user's
-`~/.config/lanscan/config.toml` with **read-only OPNsense API credentials**,
-as documented in the lanscan repository. This file is not copied into Docker,
-is not committed, and should have mode `600`.
+### Docker setup (Lenovo and ThinkPad)
 
 ```bash
 cd ~/Development/homelab-control
 git switch sprint-3a-lanscan-lan-inventory
-# Interactive sudo may prompt for a password; run as your normal user.
-bash scripts/update-lanscan.sh
+git pull --ff-only
 docker compose up -d --build
-curl -fsS http://localhost:3001/api/network/lan |
-  jq '{network, state, scannedAt, summary}'
 ```
 
-Open **http://localhost:8080**, then navigate to **NETWORK → LAN**. A
-successful `/24` snapshot has `summary.total == 254`; for a fresh scan,
-`state == "online"`. Page data reloads every 30 seconds. The host scan
-itself is separate and only updates when you run the script (or enable the
-timer below). A snapshot older than 30 minutes appears as `stale`, but its
-last-known address table is retained.
+Open **http://localhost:8080 → NETWORK → LAN** and click **Scan now**.
 
-**No OPNsense credentials configured yet?** Run
-`LANSCAN_WITH_OPNSENSE=0 bash scripts/update-lanscan.sh` for an ARP-only
-snapshot. This is less reliable for judging which addresses are free,
-because offline DHCP reservations will not be included.
+The Docker image automatically installs a pinned release of the existing
+[`unilsson/lanscan`](https://github.com/unilsson/lanscan) Python CLI and
+`arp-scan`. You do **not** need to install them on the Linux host.
 
-### Automatic and manual scans on Lenovo or ThinkPad (after setup)
+**Important Docker networking change:** The backend uses
+`network_mode: host` on Linux, because ARP broadcasts are not delivered to
+your physical LAN from an ordinary Docker bridge. The backend still runs as
+the non-root `node` user. Only `CAP_NET_RAW` is granted, and only the
+`arp-scan` binary receives that file capability. The tiny in-container
+`sudo` compatibility shim executes *only* the configured `arp-scan` subnet;
+it does not raise privileges or provide a root shell.
 
-Install and configure `lanscan` **on the Linux host**, not inside
-Homelab Control's Docker container. This works on Lenovo while testing and
-on ThinkPad after approval and merge. If using OPNsense correlation,
-securely create the host user's `~/.config/lanscan/config.toml` on each
-host as above.
+The frontend remains on its usual bridged Docker network. Its Nginx template
+proxies API requests through `host.docker.internal` to the configured
+`BACKEND_PORT` on the host. This requires **Linux Docker Engine** with
+`host-gateway` support.
 
-`lanscan` internally runs `sudo arp-scan 192.168.1.0/24`. A
-noninteractive **user** timer therefore needs narrowly scoped sudo permission
-for that exact command. Do **not** enable blanket passwordless sudo or run
-the full web application as root. Check the installed path first with
-`command -v arp-scan` (often `/usr/bin/arp-scan`). Then on the Linux host:
+**Ports are unchanged:**
+- Lenovo: `BACKEND_PORT=3001`, frontend normally `8080`.
+- ThinkPad: `BACKEND_PORT=3002`, frontend normally `8080`.
+
+Unlike Docker port publishing, host networking makes the backend bind to
+the actual `BACKEND_PORT`. A different local process must not already be
+listening there. Keep the backend and frontend reachable **only on your
+trusted LAN**; Homelab Control does not yet have a user login. The scanner
+does not permit clients to choose additional target networks.
+
+For a quick check on Lenovo:
 
 ```bash
-sudo visudo -f /etc/sudoers.d/homelab-lanscan
+curl -fsS http://localhost:3001/api/network/lan |
+  jq '{network, state, scannedAt, summary, scan}'
 ```
 
-Add one line, adapting the binary path if needed:
+On ThinkPad, use port `3002`.
 
-```text
-unilsson ALL=(root) NOPASSWD: /usr/bin/arp-scan 192.168.1.0/24
-```
+### Optional OPNsense DHCP correlation
 
-This permits only that one ARP scan command. Test it with
-`sudo -n /usr/bin/arp-scan 192.168.1.0/24 >/dev/null`.
-If the installation uses a different sudo rule or scanner binary, adjust
-accordingly; the exporter always invokes the existing `lanscan` CLI.
-
-Manually verify the first scan **on the Linux host**:
+By default `LANSCAN_WITH_OPNSENSE=false`; ARP and DNS are available out
+of the box, but offline static reservations cannot be identified.
+If you want accurate `LEASED` and `RESERVED` states, give the scanner
+the read-only OPNsense DHCP configuration you already use with `lanscan`:
 
 ```bash
 cd ~/Development/homelab-control
-bash scripts/update-lanscan.sh
-# ThinkPad backend uses port 3002; use port 3001 on Lenovo instead.
-curl -fsS http://127.0.0.1:3002/api/network/lan |
-  jq '{state, network, scannedAt, summary, scan}'
+cp ~/.config/lanscan/config.toml secrets/lanscan-config.toml
+chmod 600 secrets/lanscan-config.toml
 ```
 
-When the manual test works, enable the included **user** timer:
+In the machine's **local** `.env`, set:
+
+```text
+LANSCAN_NETWORK=192.168.1.0/24
+LANSCAN_WITH_OPNSENSE=true
+```
+
+The file is Git-ignored and mounted through the existing **read-only**
+`./secrets:/app/secrets` volume. The image links the CLI's default
+`~/.config/lanscan/config.toml` path to
+`/app/secrets/lanscan-config.toml`. The file must be readable by the
+container's `node` user (UID 1000 on the standard Node image).
+Do **not** put API keys in `.env`, GitHub, logs or browser responses.
+Restart the backend after changing `.env`:
 
 ```bash
-mkdir -p ~/.config/systemd/user
-cp systemd/homelab-lanscan.service systemd/homelab-lanscan.timer ~/.config/systemd/user/
+docker compose up -d --force-recreate backend
+```
+
+The same file/configuration is needed separately on ThinkPad after approval;
+Ansible does **not** copy local secrets.
+
+### Troubleshooting
+
+```bash
+docker compose ps
+docker compose logs --tail=80 backend
+curl -s http://localhost:3001/api/network/lan | jq '.scan'
+```
+
+If scans fail, check that the host has access to the intended LAN and
+supports Docker host networking. If enabling OPNsense makes scans fail,
+check the mounted credentials, TLS settings and OPNsense API reachability.
+You can revert to `LANSCAN_WITH_OPNSENSE=false` for an ARP-only test.
+
+If you previously configured the *unmerged, older* systemd worker approach
+on Lenovo, it is no longer needed. You may disable and remove its user
+timer/service:
+
+```bash
+systemctl --user disable --now homelab-lanscan.timer 2>/dev/null || true
+rm -f ~/.config/systemd/user/homelab-lanscan.service \
+      ~/.config/systemd/user/homelab-lanscan.timer
 systemctl --user daemon-reload
-systemctl --user enable --now homelab-lanscan.timer
-systemctl --user list-timers homelab-lanscan.timer
-journalctl --user -u homelab-lanscan.service -n 40 --no-pager
 ```
 
-The timer checks for a **Scan now** request every minute. If there is no
-manual request, it refreshes the snapshot approximately every 15 minutes.
-The host service runs as your normal user; sudo is restricted to the exact
-ARP scan binary and subnet. **Do not copy any root credentials into Docker.**
+A previously added `/etc/sudoers.d/homelab-lanscan` rule is also unnecessary
+and should be reviewed/removed with administrator privileges.
 
-Verify that the worker is active and the scan button is available:
-
-```bash
-curl -fsS http://127.0.0.1:3002/api/network/lan | jq '.scan'
-# On Lenovo use http://127.0.0.1:3001 instead.
-# Click NETWORK → LAN → Scan now and watch state queued → running → completed.
-journalctl --user -u homelab-lanscan.service -n 40 --no-pager
-```
-
-If you already installed an older version of these systemd units, copy
-both units again and run `systemctl --user daemon-reload` and
-`systemctl --user restart homelab-lanscan.timer`.
-
-**API responses:** `POST /api/network/lan/scan` returns HTTP 202 when queued,
-409 for an active scan, 429 if a manual scan was requested less than 90
-seconds ago, or 503 if the host worker is unavailable. Cross-site browser
-POSTs are rejected; the application still has **no user authentication**, so
-LAN and API access must remain restricted to trusted devices.
-
-If you want it to
-continue when `unilsson` is logged out, enable systemd lingering for that
-user (`sudo loginctl enable-linger unilsson`). The included service
-assumes the repo is at `~/Development/homelab-control`. If you intentionally
-do not use the OPNsense API, change `LANSCAN_WITH_OPNSENSE=1` to `0` in
-your **local installed copy** of the service before enabling the timer.
-
-**Important safety note:** `FREE` means only that no device answered ARP
-and (with `--opnsense`) OPNsense knows of no active lease or static mapping.
-It does *not* guarantee an address is unused by a sleeping, static-IP or
-otherwise invisible device. Never automatically allocate IPs based solely
-on these scans. Keep the LAN dashboard on your trusted network: the
-web app does not yet have authentication.
-
-The script only replaces the snapshot **after validating** that all expected
-IP addresses are present. On scan failure, the previous snapshot is preserved
-and subsequently flagged stale. The snapshot is Git-ignored. Ansible
-deploys application code only; it does **not** provision `lanscan`,
-the OPNsense credentials, the sudoers entry or the user timer.
+**Interpretation:** `FREE` means no ARP response and, when OPNsense is
+enabled, no active DHCP lease or static reservation. Sleeping/static hosts
+can still escape discovery. Never automatically allocate IP addresses based
+only on this scan.
