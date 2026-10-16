@@ -98,6 +98,42 @@ test('concurrent requests are rejected, without starting duplicate scans', async
   }
 });
 
+test('Infisical-backed OPNsense failure prevents overwriting known reservations as FREE', async () => {
+  let failDhcp = false;
+  let calls = 0;
+  const t = setup(async () => ({ stdout: JSON.stringify(validDocument()) }), true, async () => {
+    calls++;
+    if (failDhcp) throw new Error('OPNsense token unavailable - sensitive details');
+    return [{
+      ip: '192.168.1.254', mac: 'aa:bb:cc:dd:ee:ff', hostname: 'reserved-printer',
+      interface: 'LAN', state: 'active', starts: null, ends: null, type: 'static',
+      status: null, description: 'Printer', manufacturer: null, isStatic: true
+    }];
+  });
+  try {
+    assert.equal(t.scanner.requestScan().httpStatus, 202);
+    await waitForState(t.scanner, 'completed');
+    let document = JSON.parse(readFileSync(t.snapshot, 'utf8')) as {
+      results: Array<{ ip: string; status: string }>
+    };
+    assert.equal(document.results.find(r => r.ip === '192.168.1.254')?.status, 'reserved');
+    const preserved = readFileSync(t.snapshot, 'utf8');
+    failDhcp = true;
+    t.clock(91_000);
+    assert.equal(t.scanner.requestScan().httpStatus, 202);
+    await waitForState(t.scanner, 'failed');
+    assert.equal(readFileSync(t.snapshot, 'utf8'), preserved);
+    assert.equal(calls, 2);
+    assert.ok(!JSON.stringify(t.scanner.info()).includes('sensitive details'));
+    document = JSON.parse(readFileSync(t.snapshot, 'utf8')) as {
+      results: Array<{ ip: string; status: string }>
+    };
+    assert.equal(document.results.find(r => r.ip === '192.168.1.254')?.status, 'reserved');
+  } finally {
+    t.cleanup();
+  }
+});
+
 test('invalid JSON, incomplete scans and CLI failures preserve last successful snapshot', async () => {
   let result: string | null = JSON.stringify(validDocument());
   const t = setup(async () => {
