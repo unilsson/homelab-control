@@ -23,3 +23,19 @@ CREATE TABLE IF NOT EXISTS events (
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 `);
+
+/**
+ * Forward-only migration from the Sprint 1 schema.
+ * Existing rows, event history and SQLite data remain intact.
+ */
+const columns = db.pragma('table_info(systems)') as Array<{ name: string }>;
+for (const [name, definition] of [
+  ['source', 'TEXT'],
+  ['external_id', 'TEXT'],
+  ['last_seen', 'TEXT']
+] as const) {
+  if (!columns.some(column => column.name === name)) {
+    db.exec('ALTER TABLE systems ADD COLUMN ' + name + ' ' + definition);
+  }
+}
+db.exec('CREATE UNIQUE INDEX IF NOT EXISTS systems_external_identity ON systems(source, external_id) WHERE source IS NOT NULL AND external_id IS NOT NULL');

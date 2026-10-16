@@ -1,0 +1,18 @@
+[
+  {
+    "id": "pve-a",
+    "name": "Proxmox A",
+    "url": "https://proxmox-a.example.invalid:8006",
+    "tokenId": "monitor@pve!discovery",
+    "tokenSecretRef": "PROXMOX_A_TOKEN",
+    "caPath": "/app/certs/proxmox-a-ca.pem"
+  },
+  {
+    "id": "pve-b",
+    "name": "Proxmox B",
+    "url": "https://proxmox-b.example.invalid:8006",
+    "tokenId": "monitor@pve!discovery",
+    "tokenSecretRef": "PROXMOX_B_TOKEN",
+    "caPath": "/app/certs/proxmox-b-ca.pem"
+  }
+]

@@ -1,0 +1,159 @@
+import { readFileSync } from 'node:fs';
+import { InfisicalSDK } from '@infisical/sdk';
+
+/**
+ * Server-side secret provider for read-only integrations.
+ * Infisical API responses and machine credentials are never logged or sent to clients.
+ */
+const refreshMs = 5 * 60_000;
+const maxStaleMs = 60 * 60_000;
+
+type CachedValue = { value: string; fetchedAt: number };
+type PublicState = 'disabled' | 'idle' | 'online' | 'degraded' | 'error';
+
+export type SecretProviderStatus = {
+  provider: 'infisical';
+  configured: boolean;
+  state: PublicState;
+  lastCheckedAt: string | null;
+  message?: string;
+};
+
+const cache = new Map<string, CachedValue>();
+const pending = new Map<string, Promise<string>>();
+const outcomes = new Map<string, 'online' | 'degraded' | 'error'>();
+let lastCheckedAt: string | null = null;
+
+function bootstrapSecret(): string {
+  const file = process.env.INFISICAL_CLIENT_SECRET_FILE?.trim();
+  if (file) {
+    try {
+      return readFileSync(file, 'utf8').trim();
+    } catch {
+      throw new Error('Infisical bootstrap secret file cannot be read.');
+    }
+  }
+  return process.env.INFISICAL_CLIENT_SECRET?.trim() ?? '';
+}
+
+type InfisicalConfig = {
+  siteUrl: string;
+  clientId: string;
+  clientSecret: string;
+  projectId: string;
+  environment: string;
+  secretPath: string;
+};
+
+function readConfig(): InfisicalConfig {
+  const siteUrl = process.env.INFISICAL_SITE_URL?.trim() ?? '';
+  const clientId = process.env.INFISICAL_CLIENT_ID?.trim() ?? '';
+  const clientSecret = bootstrapSecret();
+  const projectId = process.env.INFISICAL_PROJECT_ID?.trim() ?? '';
+  const environment = process.env.INFISICAL_ENV?.trim() || 'dev';
+  const secretPath = process.env.INFISICAL_SECRET_PATH?.trim() || '/';
+  if (!siteUrl || !clientId || !clientSecret || !projectId) {
+    throw new Error('Infisical requires site URL, project ID, machine client ID and client secret.');
+  }
+  try {
+    const url = new URL(siteUrl);
+    if (url.protocol !== 'https:' || url.username || url.password ||
+        url.pathname !== '/' || url.search || url.hash) throw new Error('bad url');
+  } catch {
+    throw new Error('Infisical SITE_URL must be a trusted HTTPS origin.');
+  }
+  if (!secretPath.startsWith('/')) {
+    throw new Error('Infisical secret path must begin with /.');
+  }
+  return { siteUrl, clientId, clientSecret, projectId, environment, secretPath };
+}
+
+export function getInfisicalStatus(): SecretProviderStatus {
+  const configured = Boolean(
+    process.env.INFISICAL_SITE_URL?.trim() &&
+    process.env.INFISICAL_PROJECT_ID?.trim() &&
+    process.env.INFISICAL_CLIENT_ID?.trim() &&
+    (process.env.INFISICAL_CLIENT_SECRET_FILE?.trim() ||
+      process.env.INFISICAL_CLIENT_SECRET?.trim())
+  );
+  const states = [...outcomes.values()];
+  const status: PublicState = !configured ? 'disabled'
+    : states.length === 0 ? 'idle'
+    : states.every(s => s === 'error') ? 'error'
+    : states.some(s => s !== 'online') ? 'degraded' : 'online';
+  return {
+    provider: 'infisical',
+    configured,
+    state: status,
+    lastCheckedAt,
+    ...(status === 'error' ? { message: 'Required secrets are unavailable from Infisical.' }
+      : status === 'degraded' ? { message: 'Some secrets are unavailable or using recent cached values.' }
+      : {})
+  };
+}
+
+/**
+ * Retrieve one named secret. Cache 5 minutes; on a brief Infisical outage
+ * continue to use a previously validated value in memory for up to 1 hour.
+ * Nothing is written to disk, SQLite, or browser responses.
+ */
+export function getInfisicalSecret(secretName: string): Promise<string> {
+  if (!/^[A-Za-z][A-Za-z0-9_]{0,127}$/.test(secretName)) {
+    return Promise.reject(new Error('Invalid Infisical secret reference.'));
+  }
+  // Scope the cache to an Infisical project/environment/path, not merely a
+  // shared key name. This prevents cross-environment credential reuse.
+  const cacheKey = [
+    process.env.INFISICAL_SITE_URL ?? '',
+    process.env.INFISICAL_PROJECT_ID ?? '',
+    process.env.INFISICAL_ENV ?? 'dev',
+    process.env.INFISICAL_SECRET_PATH ?? '/',
+    process.env.INFISICAL_CLIENT_ID ?? '',
+    secretName
+  ].join('\\u0000');
+  const existing = cache.get(cacheKey);
+  if (existing && Date.now() - existing.fetchedAt < refreshMs) {
+    return Promise.resolve(existing.value);
+  }
+
+  const inflight = pending.get(cacheKey);
+  if (inflight) return inflight;
+
+  const run = (async (): Promise<string> => {
+    try {
+      const config = readConfig();
+      const client = new InfisicalSDK({ siteUrl: config.siteUrl });
+      await client.auth().universalAuth.login({
+        clientId: config.clientId,
+        clientSecret: config.clientSecret
+      });
+      const response = await client.secrets().getSecret({
+        projectId: config.projectId,
+        environment: config.environment,
+        secretPath: config.secretPath,
+        secretName,
+        viewSecretValue: true
+      });
+      const value = response.secretValue;
+      if (typeof value !== 'string' || !value.length) {
+        throw new Error('Empty secret');
+      }
+      cache.set(cacheKey, { value, fetchedAt: Date.now() });
+      outcomes.set(cacheKey, 'online');
+      lastCheckedAt = new Date().toISOString();
+      return value;
+    } catch {
+      lastCheckedAt = new Date().toISOString();
+      const lastGood = cache.get(cacheKey);
+      if (lastGood && Date.now() - lastGood.fetchedAt < maxStaleMs) {
+        outcomes.set(cacheKey, 'degraded');
+        return lastGood.value;
+      }
+      outcomes.set(cacheKey, 'error');
+      throw new Error('Required secret unavailable from Infisical.');
+    }
+  })().finally(() => { pending.delete(cacheKey); });
+
+  pending.set(cacheKey, run);
+  return run;
+}

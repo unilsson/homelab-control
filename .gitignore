@@ -5,3 +5,16 @@ data/*
 !data/.gitkeep
 *.log
 .DS_Store
+
+# Local certificates and trust material (never commit private keys)
+certs/*
+!certs/.gitkeep
+
+# Multi-instance Proxmox credentials: only examples are public
+config/*
+!config/.gitkeep
+!config/*.example.json
+
+# Infisical machine identity bootstrap credentials
+secrets/*
+!secrets/.gitkeep

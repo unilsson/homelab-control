@@ -1,6 +1,8 @@
 import express, { type ErrorRequestHandler } from 'express';
 import cors from 'cors';
 import { db } from './database.js';
+import { getProxmoxInventory } from './integrations/proxmox.js';
+import { getInfisicalStatus } from './integrations/infisical.js';
 
 const app = express();
 app.disable('x-powered-by');
@@ -11,9 +13,22 @@ app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', service: 'homelab-control-api', timestamp: new Date().toISOString() });
 });
 
-app.get('/api/systems', (_req, res) => {
-  const systems = db.prepare('SELECT id, name, type, status, host, created_at FROM systems ORDER BY name').all();
-  res.json(systems);
+app.get('/api/systems', async (_req, res, next) => {
+  try {
+    // Discovery is read-only against Proxmox; persistence is limited to local SQLite.
+    await getProxmoxInventory();
+    const systems = db.prepare('SELECT id, name, type, status, host, source, external_id, last_seen, created_at FROM systems ORDER BY type, name').all();
+    res.json(systems);
+  } catch (error) { next(error); }
+});
+
+app.get('/api/integrations/infisical', (_req, res) => {
+  res.json(getInfisicalStatus());
+});
+
+app.get('/api/integrations/proxmox', async (_req, res, next) => {
+  try { res.json(await getProxmoxInventory()); }
+  catch (error) { next(error); }
 });
 
 app.get('/api/events', (_req, res) => {
@@ -29,3 +44,7 @@ app.use(errorHandler);
 
 const port = Number(process.env.PORT ?? 3001);
 app.listen(port, '0.0.0.0', () => console.log(`Homelab Control API listening on ${port}`));
+
+// Refresh discovery once per minute, without preventing a clean process exit.
+void getProxmoxInventory();
+setInterval(() => { void getProxmoxInventory(); }, 60_000).unref();
