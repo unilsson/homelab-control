@@ -6,6 +6,8 @@ services:
       NODE_ENV: production
       PORT: 3001
       DATABASE_PATH: /app/data/homelab.sqlite
+      LANSCAN_SNAPSHOT_FILE: /app/data/lanscan.json
+      LANSCAN_NETWORK: ${LANSCAN_NETWORK:-192.168.1.0/24}
       PROXMOX_INSTANCES_FILE: ${PROXMOX_INSTANCES_FILE:-}
       PROXMOX_URL: ${PROXMOX_URL:-}
       PROXMOX_TOKEN_ID: ${PROXMOX_TOKEN_ID:-}
