@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, rename, unlink, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { promisify } from 'node:util';
-import { parseLanSnapshot } from './lanscan.js';
+import { networkSpec, parseLanSnapshot } from './lanscan.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -95,9 +95,8 @@ export class LanScanner {
   private async run(): Promise<void> {
     const { command, network, withOpnsense, snapshotPath, execute, now } = this.options;
     try {
-      // Verify the exact configured subnet BEFORE invoking the scanner.
-      // Validation of a complete JSON result repeats this check afterward.
-      // The parser checks network syntax using the supplied CIDR.
+      // Reject invalid network settings before executing any ARP traffic.
+      networkSpec(network);
       const args = [network, '--all', '--json', ...(withOpnsense ? ['--opnsense'] : [])];
       const { stdout } = await execute(command, args, {
         timeout: limits.timeoutMs, maxBuffer: limits.maxBufferBytes
