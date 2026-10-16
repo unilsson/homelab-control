@@ -354,8 +354,8 @@ async function discover(): Promise<ProxmoxInventory> {
   };
 }
 
-export function getProxmoxInventory(): Promise<ProxmoxInventory> {
-  if (cached && Date.now() - cacheTime < cacheMs) return Promise.resolve(cached);
+export function getProxmoxInventory(force = false): Promise<ProxmoxInventory> {
+  if (!force && cached && Date.now() - cacheTime < cacheMs) return Promise.resolve(cached);
   if (pending) return pending;
   pending = discover()
     .then(result => {
