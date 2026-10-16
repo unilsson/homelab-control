@@ -59,7 +59,7 @@ export type ProxmoxInventory = {
 };
 
 type PveNode = { node: string; status?: string; cpu?: number; maxcpu?: number; mem?: number; maxmem?: number; uptime?: number };
-type PveGuest = { vmid: number; name?: string; status?: string; cpu?: number; mem?: number; maxmem?: number; template?: number };
+type PveGuest = { vmid: number | string; name?: string; status?: string; cpu?: number; mem?: number; maxmem?: number; template?: number };
 
 const cacheMs = 30_000;
 let cached: ProxmoxInventory | null = null;
@@ -162,6 +162,20 @@ export function loadProxmoxConfigs(): ProxmoxInstanceConfig[] {
 
 function nullable(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+// Some Proxmox versions serialize VMIDs as decimal strings in QEMU/LXC lists.
+// Normalize only positive safe integers so the public API and SQLite keys
+// keep consistent numeric IDs across installations.
+function parseVmid(value: unknown): number | null {
+  if (typeof value === 'number') {
+    return Number.isSafeInteger(value) && value > 0 ? value : null;
+  }
+  if (typeof value === 'string' && /^[0-9]+$/.test(value)) {
+    const parsed = Number(value);
+    return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+  }
+  return null;
 }
 
 // HTTPS only, no redirect handling (to avoid forwarding tokens).
@@ -301,13 +315,17 @@ async function discoverInstance(instance: ResolvedInstanceConfig): Promise<Proxm
     const requests = active.flatMap(node => (['qemu', 'lxc'] as const).map(async kind => {
       const guests = await requestData<PveGuest[]>(instance, '/nodes/' + encodeURIComponent(node.name) + '/' + kind);
       if (!Array.isArray(guests)) throw new Error('Unexpected Proxmox guest response');
-      return guests.filter(g => g && typeof g.vmid === 'number').map(g => ({
-        instanceId: instance.id, instanceName: instance.name,
-        vmid: g.vmid, name: g.name || kind.toUpperCase() + ' ' + g.vmid,
-        node: node.name, kind, status: g.status ?? 'unknown',
-        cpu: nullable(g.cpu), mem: nullable(g.mem),
-        maxmem: nullable(g.maxmem), template: Boolean(g.template)
-      }));
+      return guests.flatMap(g => {
+        const vmid = g ? parseVmid(g.vmid) : null;
+        if (vmid === null) return [];
+        return [{
+          instanceId: instance.id, instanceName: instance.name,
+          vmid, name: g.name || kind.toUpperCase() + ' ' + vmid,
+          node: node.name, kind, status: g.status ?? 'unknown',
+          cpu: nullable(g.cpu), mem: nullable(g.mem),
+          maxmem: nullable(g.maxmem), template: Boolean(g.template)
+        }];
+      });
     }));
     const results = await Promise.allSettled(requests);
     const guests: ProxmoxGuest[] = results
