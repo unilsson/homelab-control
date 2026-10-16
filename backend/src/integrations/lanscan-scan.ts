@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { readFile, readdir, stat, writeFile, rename, unlink } from 'node:fs/promises';
+import { readFile, stat, writeFile, rename, unlink } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
 export type ScanState = 'unavailable' | 'idle' | 'queued' | 'running' | 'completed' | 'failed';
@@ -17,6 +17,7 @@ type WorkerStatus = {
   requestId: string | null;
   state: 'running' | 'completed' | 'failed';
   startedAt: string;
+  requestedAt: string | null;
   finishedAt: string | null;
 };
 
@@ -63,11 +64,13 @@ function parseStatus(value: unknown): WorkerStatus | null {
   const v = value as Record<string, unknown>;
   if (v.requestId !== null && (typeof v.requestId !== 'string' || !/^[0-9a-f-]{36}$/i.test(v.requestId))) return null;
   if (v.state !== 'running' && v.state !== 'completed' && v.state !== 'failed') return null;
-  if (!validTime(v.startedAt) || (v.finishedAt !== null && !validTime(v.finishedAt))) return null;
+  if (!validTime(v.startedAt) || (v.requestedAt !== null && !validTime(v.requestedAt)) ||
+      (v.finishedAt !== null && !validTime(v.finishedAt))) return null;
   return {
     requestId: v.requestId as string | null,
     state: v.state,
     startedAt: v.startedAt,
+    requestedAt: v.requestedAt as string | null,
     finishedAt: v.finishedAt as string | null
   };
 }
@@ -84,7 +87,7 @@ export async function getLanScanInfo(dir = scanDataDir()): Promise<LanScanInfo> 
   const status = parseStatus(rawStatus);
   const base = {
     available,
-    requestedAt: request?.requestedAt ?? null,
+    requestedAt: request?.requestedAt ?? status?.requestedAt ?? null,
     startedAt: status?.startedAt ?? null,
     finishedAt: status?.finishedAt ?? null
   };
