@@ -14,3 +14,7 @@ certs/*
 config/*
 !config/.gitkeep
 !config/*.example.json
+
+# Infisical machine identity bootstrap credentials
+secrets/*
+!secrets/.gitkeep
