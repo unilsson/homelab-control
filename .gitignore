@@ -9,3 +9,8 @@ data/*
 # Local certificates and trust material (never commit private keys)
 certs/*
 !certs/.gitkeep
+
+# Multi-instance Proxmox credentials: only examples are public
+config/*
+!config/.gitkeep
+!config/*.example.json
