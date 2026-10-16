@@ -7,16 +7,22 @@ type System = {
 };
 type Event = { id: number; severity: string; message: string; created_at: string };
 type ProxmoxNode = {
+  instanceId: string; instanceName: string;
   name: string; status: string; cpu: number | null; maxcpu: number | null;
   mem: number | null; maxmem: number | null; uptime: number | null;
 };
 type ProxmoxGuest = {
+  instanceId: string; instanceName: string;
   vmid: number; name: string; node: string; kind: 'qemu' | 'lxc';
   status: string; cpu: number | null; mem: number | null; maxmem: number | null; template: boolean;
 };
+type ProxmoxInstance = {
+  id: string; name: string; state: 'online' | 'partial' | 'error'; checkedAt: string;
+  nodes: ProxmoxNode[]; guests: ProxmoxGuest[]; error?: string;
+};
 type ProxmoxInventory = {
   configured: boolean; state: 'disabled' | 'online' | 'partial' | 'error'; checkedAt: string | null;
-  nodes: ProxmoxNode[]; guests: ProxmoxGuest[]; error?: string;
+  instances: ProxmoxInstance[]; nodes: ProxmoxNode[]; guests: ProxmoxGuest[]; error?: string;
 };
 type Page = 'Dashboard' | 'Systems' | 'Services' | 'Actions' | 'Events' | 'Discoveries' | 'Analysis' | 'Integrations';
 
@@ -27,7 +33,7 @@ const sections: { label: string; pages: Page[] }[] = [
   { label: 'SETTINGS', pages: ['Integrations'] }
 ];
 
-const defaultInventory: ProxmoxInventory = { configured: false, state: 'disabled', checkedAt: null, nodes: [], guests: [] };
+const defaultInventory: ProxmoxInventory = { configured: false, state: 'disabled', checkedAt: null, instances: [], nodes: [], guests: [] };
 
 function iconFor(page: Page) {
   if (page === 'Dashboard') return <LayoutDashboard size={17} />;
@@ -40,7 +46,8 @@ function iconFor(page: Page) {
 
 function statusClass(status: string): string {
   if (status === 'online' || status === 'healthy' || status === 'running') return 'status good';
-  if (status === 'stopped' || status === 'disabled') return 'status neutral';
+  if (status === 'stopped' || status === 'disabled' || status === 'unknown') return 'status neutral';
+  if (status === 'partial') return 'status caution';
   return 'status bad';
 }
 
@@ -110,18 +117,34 @@ export default function App() {
   </div>;
 
   const proxmoxPanel = <section className="panel">
-    <div className="panel-title"><div><h2>Proxmox infrastructure</h2><p>Live node and guest inventory · read-only</p></div>
-      <span className={statusClass(proxmox.state === 'partial' ? 'unknown' : proxmox.state)}>{proxmox.state}</span></div>
-    {proxmox.state === 'disabled' ? <div className="empty">Proxmox is not configured. Add PROXMOX_URL and a read-only API token to your local .env file.</div> :
-      proxmox.state === 'error' ? <div className="notice"><TriangleAlert size={17}/><span>{proxmox.error || 'Proxmox is unavailable.'}</span></div> : <>
+    <div className="panel-title">
+      <div><h2>Proxmox infrastructure</h2><p>Multiple servers · read-only discovery</p></div>
+      <span className={statusClass(proxmox.state)}>{proxmox.state}</span>
+    </div>
+    {proxmox.state === 'disabled'
+      ? <div className="empty">No Proxmox servers configured yet. Create a local config/proxmox-instances.json and set PROXMOX_INSTANCES_FILE in .env.</div>
+      : <>
         {proxmox.error && <div className="notice"><TriangleAlert size={17}/><span>{proxmox.error}</span></div>}
-        <div className="mini-stats"><span><Server size={15}/> {proxmox.nodes.length} nodes</span><span><Cpu size={15}/> {proxmox.guests.filter(g => g.kind === 'qemu').length} VMs</span><span><Layers3 size={15}/> {proxmox.guests.filter(g => g.kind === 'lxc').length} LXC</span><span><Activity size={15}/> {guestsRunning} running</span></div>
-        {proxmox.nodes.map(node => <div key={node.name} className="node-block">
-          <div className="node-header"><strong>{node.name}</strong><span className={statusClass(node.status)}>{node.status}</span></div>
-          <div className="node-details"><span>CPU {formatCPU(node.cpu)}</span><span>RAM {formatMemory(node.mem)} / {formatMemory(node.maxmem)}</span></div>
-          {proxmox.guests.filter(g => g.node === node.name).map(guest => <div className="guest-row" key={guest.kind + ':' + guest.vmid}>
-            <div className="guest-name"><span className="vmid">{guest.vmid}</span><strong>{guest.name}</strong><span className="guest-kind">{guest.kind.toUpperCase()}{guest.template ? ' · template' : ''}</span></div>
-            <div className="guest-metrics"><span>{formatCPU(guest.cpu)}</span><span>{formatMemory(guest.mem)}</span><span className={statusClass(guest.status)}>{guest.status}</span></div>
+        <div className="mini-stats">
+          <span><Server size={15}/> {proxmox.instances.length} connections</span>
+          <span><Database size={15}/> {proxmox.nodes.length} nodes</span>
+          <span><Cpu size={15}/> {proxmox.guests.filter(g => g.kind === 'qemu').length} VMs</span>
+          <span><Layers3 size={15}/> {proxmox.guests.filter(g => g.kind === 'lxc').length} LXC</span>
+          <span><Activity size={15}/> {guestsRunning} running</span>
+        </div>
+        {proxmox.instances.map(instance => <div className="proxmox-instance" key={instance.id}>
+          <div className="instance-title">
+            <div><strong>{instance.name}</strong><span>{instance.id} · {instance.nodes.length} nodes · {instance.guests.length} guests</span></div>
+            <span className={statusClass(instance.state)}>{instance.state}</span>
+          </div>
+          {instance.error && <div className="notice"><TriangleAlert size={17}/><span>{instance.error}</span></div>}
+          {instance.nodes.map(node => <div key={instance.id + ':' + node.name} className="node-block">
+            <div className="node-header"><strong>{node.name}</strong><span className={statusClass(node.status)}>{node.status}</span></div>
+            <div className="node-details"><span>CPU {formatCPU(node.cpu)}</span><span>RAM {formatMemory(node.mem)} / {formatMemory(node.maxmem)}</span></div>
+            {instance.guests.filter(g => g.node === node.name).map(guest => <div className="guest-row" key={instance.id + ':' + guest.kind + ':' + guest.vmid}>
+              <div className="guest-name"><span className="vmid">{guest.vmid}</span><strong>{guest.name}</strong><span className="guest-kind">{guest.kind.toUpperCase()}{guest.template ? ' · template' : ''}</span></div>
+              <div className="guest-metrics"><span>{formatCPU(guest.cpu)}</span><span>{formatMemory(guest.mem)}</span><span className={statusClass(guest.status)}>{guest.status}</span></div>
+            </div>)}
           </div>)}
         </div>)}
       </>}
@@ -149,10 +172,17 @@ export default function App() {
         <section className="panel"><div className="panel-title"><h2>Registered systems</h2><button className="text-action" onClick={() => setPage('Systems')} type="button">View all →</button></div>{systemRows}</section>
         <section className="panel"><h2>Recent events</h2>{events.length === 0 ? <div className="empty">No events recorded yet.</div> : events.slice(0, 5).map(e => <div className="row" key={e.id}><strong>{e.message}</strong><span>{e.severity} · {e.created_at}</span></div>)}</section>
       </> : page === 'Systems' ? <><section className="panel"><h2>Discovered systems</h2>{systemRows}</section>{proxmoxPanel}</> :
-      page === 'Integrations' ? <section className="panel"><div className="panel-title"><h2>Proxmox VE</h2><span className={statusClass(proxmox.state === 'partial' ? 'unknown' : proxmox.state)}>{proxmox.state}</span></div>
-        <p className="panel-copy">Read-only discovery of nodes, virtual machines and LXC containers. Configure PROXMOX_URL, PROXMOX_TOKEN_ID and PROXMOX_TOKEN_SECRET in your local .env file and restart the backend.</p>
-        {proxmox.error && <div className="notice">{proxmox.error}</div>}
+      page === 'Integrations' ? <section className="panel">
+        <div className="panel-title"><h2>Proxmox VE connections</h2><span className={statusClass(proxmox.state)}>{proxmox.state}</span></div>
+        <p className="panel-copy">Manage multiple independent Proxmox installations through your local <code>config/proxmox-instances.json</code> file. Each server has its own read-only API token and optional CA certificate.</p>
         <p className="panel-copy muted">Last checked: {proxmox.checkedAt ? new Date(proxmox.checkedAt).toLocaleString() : 'never'} · Credentials are never sent to the browser.</p>
+        {proxmox.error && <div className="notice">{proxmox.error}</div>}
+        {proxmox.instances.length === 0 && <div className="empty">No connections configured.</div>}
+        {proxmox.instances.map(instance => <div key={instance.id} className="integration-row">
+          <div><strong>{instance.name}</strong><span>{instance.id} · {instance.nodes.length} nodes · {instance.guests.length} guests</span>
+            {instance.error && <span className="integration-error">{instance.error}</span>}</div>
+          <span className={statusClass(instance.state)}>{instance.state}</span>
+        </div>)}
         <div className="mini-stats"><span><Database size={15}/> {proxmox.nodes.length} nodes</span><span><HardDrive size={15}/> {proxmox.guests.length} guests</span></div>
       </section> :
       page === 'Events' ? <section className="panel"><h2>Events</h2>{events.length ? events.map(e => <div className="row" key={e.id}><strong>{e.message}</strong><span>{e.severity} · {e.created_at}</span></div>) : <div className="empty">No events recorded yet.</div>}</section> :
