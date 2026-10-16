@@ -236,8 +236,9 @@ Proxmox connection errors remain independent.
 **TLS:** Both Infisical and Proxmox must have trusted HTTPS certificates.
 Do not disable TLS verification. If your self-hosted Infisical uses an internal
 CA instead of a publicly trusted certificate, mount only the **public CA**
-and configure `NODE_EXTRA_CA_CERTS` for the backend (additional Compose setup
-may be required); never store private keys in the repo.
+and set `INFISICAL_CA_PATH=/app/certs/infisical-ca.pem` in the local `.env`
+(the Compose file sets `NODE_EXTRA_CA_CERTS` for the backend). Never store
+private keys in the repository.
 
 **Backwards compatibility:** Existing `tokenSecret` entries continue working.
 For new installations use `tokenSecretRef` exclusively. Do not specify both
