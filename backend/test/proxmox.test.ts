@@ -23,7 +23,7 @@ test('two independent Proxmox servers have isolated inventories and errors', asy
       '-addext', 'subjectAltName=IP:127.0.0.1'
     ], { stdio: 'ignore' });
 
-    const createServer = (token: string, hostname: string) => {
+    const createServer = (token: string, hostname: string, stringVmids = false) => {
       const server = https.createServer({
         key: readFileSync(key),
         cert: readFileSync(cert)
@@ -39,9 +39,15 @@ test('two independent Proxmox servers have isolated inventories and errors', asy
           res.end(JSON.stringify({ data: [{ node: hostname, status: 'online', cpu: 0.12, mem: 1073741824, maxmem: 8589934592 }] }));
         } else if (req.url === '/api2/json/nodes/' + hostname + '/qemu') {
           // Both installations intentionally use VMID 100.
-          res.end(JSON.stringify({ data: [{ vmid: 100, name: 'web', status: 'running' }] }));
+          res.end(JSON.stringify({ data: [
+            { vmid: stringVmids ? '100' : 100, name: 'web', status: 'running' },
+            ...(stringVmids ? [{ vmid: 'not-a-vmid', name: 'invalid', status: 'running' }] : [])
+          ] }));
         } else if (req.url === '/api2/json/nodes/' + hostname + '/lxc') {
-          res.end(JSON.stringify({ data: [{ vmid: 200, name: 'monitor', status: 'stopped' }] }));
+          res.end(JSON.stringify({ data: [
+            { vmid: stringVmids ? '200' : 200, name: 'monitor', status: 'stopped' },
+            ...(stringVmids ? [{ vmid: '9007199254740992', name: 'out-of-range', status: 'stopped' }] : [])
+          ] }));
         } else {
           res.writeHead(404);
           res.end();
@@ -50,7 +56,7 @@ test('two independent Proxmox servers have isolated inventories and errors', asy
       servers.push(server);
       return server;
     };
-    const first = createServer('first-secret', 'node-a');
+    const first = createServer('first-secret', 'node-a', true);
     const second = createServer('second-secret', 'node-b');
 
     for (const server of servers) {
@@ -77,6 +83,10 @@ test('two independent Proxmox servers have isolated inventories and errors', asy
     assert.equal(inventory.nodes.length, 2);
     assert.equal(inventory.guests.length, 4);
     assert.equal(inventory.guests.filter(g => g.vmid === 100).length, 2);
+    assert.equal(inventory.guests.filter(g => g.vmid === 200).length, 2);
+    assert.ok(inventory.guests.every(g => typeof g.vmid === 'number'));
+    assert.ok(!inventory.guests.some(g => g.name === 'invalid' || g.name === 'out-of-range'));
+    assert.deepEqual(inventory.instances[0].guests.map(g => g.vmid).sort((a, b) => a - b), [100, 200]);
     assert.equal(inventory.guests.find(g => g.instanceId === 'alpha')?.instanceName, 'Proxmox A');
     assert.equal(inventory.guests.find(g => g.instanceId === 'beta')?.instanceName, 'Proxmox B');
     assert.ok(!JSON.stringify(inventory).includes('first-secret'));
