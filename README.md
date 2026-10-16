@@ -16,8 +16,8 @@ A unified control and investigation dashboard for a self-hosted homelab, combini
 Requires Docker Engine and Docker Compose plugin.
 
 ```bash
-git clone https://github.com/unilsson/home-control.git
-cd home-control
+git clone https://github.com/unilsson/homelab-control.git
+cd homelab-control
 git switch sprint-1-foundation
 cp .env.example .env
 docker compose up -d --build
