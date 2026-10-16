@@ -3,6 +3,7 @@ import cors from 'cors';
 import { db } from './database.js';
 import { getProxmoxInventory } from './integrations/proxmox.js';
 import { getInfisicalStatus } from './integrations/infisical.js';
+import { readLanInventory } from './integrations/lanscan.js';
 
 const app = express();
 app.disable('x-powered-by');
@@ -28,6 +29,11 @@ app.get('/api/integrations/infisical', (_req, res) => {
 
 app.get('/api/integrations/proxmox', async (_req, res, next) => {
   try { res.json(await getProxmoxInventory()); }
+  catch (error) { next(error); }
+});
+
+app.get('/api/network/lan', async (_req, res, next) => {
+  try { res.json(await readLanInventory()); }
   catch (error) { next(error); }
 });
 
