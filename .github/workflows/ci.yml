@@ -20,6 +20,8 @@ jobs:
         run: |
           npm install --prefix backend
           npm run build --prefix backend
+      - name: Test multi-Proxmox discovery
+        run: npm run test --prefix backend
       - name: Install and build frontend
         run: |
           npm install --prefix frontend
