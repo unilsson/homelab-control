@@ -74,9 +74,9 @@ export function getOpnsenseStatus(): OpnsenseStatus {
   );
   return {
     configured,
-    state: !enabled ? 'disabled' : lastState,
+    state: !enabled ? 'disabled' : !configured ? 'error' : lastState,
     lastCheckedAt: checkedAt,
-    ...(!configured && enabled ? { state: 'error' as const, message: 'OPNsense is not configured.' }
+    ...(!configured && enabled ? { message: 'OPNsense is not configured.' }
       : lastState === 'error' ? { message: 'OPNsense DHCP discovery failed; previous LAN snapshot was preserved.' } : {})
   };
 }
