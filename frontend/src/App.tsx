@@ -24,6 +24,11 @@ type ProxmoxInventory = {
   configured: boolean; state: 'disabled' | 'online' | 'partial' | 'error'; checkedAt: string | null;
   instances: ProxmoxInstance[]; nodes: ProxmoxNode[]; guests: ProxmoxGuest[]; error?: string;
 };
+type SecretProviderStatus = {
+  provider: 'infisical'; configured: boolean;
+  state: 'disabled' | 'idle' | 'online' | 'degraded' | 'error';
+  lastCheckedAt: string | null; message?: string;
+};
 type Page = 'Dashboard' | 'Systems' | 'Services' | 'Actions' | 'Events' | 'Discoveries' | 'Analysis' | 'Integrations';
 
 const sections: { label: string; pages: Page[] }[] = [
@@ -46,8 +51,8 @@ function iconFor(page: Page) {
 
 function statusClass(status: string): string {
   if (status === 'online' || status === 'healthy' || status === 'running') return 'status good';
-  if (status === 'stopped' || status === 'disabled' || status === 'unknown') return 'status neutral';
-  if (status === 'partial') return 'status caution';
+  if (status === 'stopped' || status === 'disabled' || status === 'unknown' || status === 'idle') return 'status neutral';
+  if (status === 'partial' || status === 'degraded') return 'status caution';
   return 'status bad';
 }
 
@@ -66,6 +71,7 @@ export default function App() {
   const [systems, setSystems] = useState<System[]>([]);
   const [events, setEvents] = useState<Event[]>([]);
   const [proxmox, setProxmox] = useState<ProxmoxInventory>(defaultInventory);
+  const [infisical, setInfisical] = useState<SecretProviderStatus>({ provider: 'infisical', configured: false, state: 'disabled', lastCheckedAt: null });
   const [loading, setLoading] = useState(true);
   const [apiError, setApiError] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
@@ -74,24 +80,27 @@ export default function App() {
     const controller = new AbortController();
     const load = async () => {
       try {
-        const [healthResponse, systemsResponse, eventsResponse, proxmoxResponse] = await Promise.all([
+        const [healthResponse, systemsResponse, eventsResponse, proxmoxResponse, infisicalResponse] = await Promise.all([
           fetch('/api/health', { signal: controller.signal }),
           fetch('/api/systems', { signal: controller.signal }),
           fetch('/api/events', { signal: controller.signal }),
-          fetch('/api/integrations/proxmox', { signal: controller.signal })
+          fetch('/api/integrations/proxmox', { signal: controller.signal }),
+          fetch('/api/integrations/infisical', { signal: controller.signal })
         ]);
-        if (![healthResponse, systemsResponse, eventsResponse, proxmoxResponse].every(r => r.ok)) throw new Error('API unavailable');
-        const [health, newSystems, newEvents, newProxmox] = await Promise.all([
+        if (![healthResponse, systemsResponse, eventsResponse, proxmoxResponse, infisicalResponse].every(r => r.ok)) throw new Error('API unavailable');
+        const [health, newSystems, newEvents, newProxmox, newInfisical] = await Promise.all([
           healthResponse.json() as Promise<{ status: string }>,
           systemsResponse.json() as Promise<System[]>,
           eventsResponse.json() as Promise<Event[]>,
-          proxmoxResponse.json() as Promise<ProxmoxInventory>
+          proxmoxResponse.json() as Promise<ProxmoxInventory>,
+          infisicalResponse.json() as Promise<SecretProviderStatus>
         ]);
         if (controller.signal.aborted) return;
         setOnline(health.status === 'ok');
         setSystems(newSystems);
         setEvents(newEvents);
         setProxmox(newProxmox);
+        setInfisical(newInfisical);
         setApiError(false);
       } catch {
         if (!controller.signal.aborted) { setOnline(false); setApiError(true); }
@@ -172,7 +181,7 @@ export default function App() {
         <section className="panel"><div className="panel-title"><h2>Registered systems</h2><button className="text-action" onClick={() => setPage('Systems')} type="button">View all →</button></div>{systemRows}</section>
         <section className="panel"><h2>Recent events</h2>{events.length === 0 ? <div className="empty">No events recorded yet.</div> : events.slice(0, 5).map(e => <div className="row" key={e.id}><strong>{e.message}</strong><span>{e.severity} · {e.created_at}</span></div>)}</section>
       </> : page === 'Systems' ? <><section className="panel"><h2>Discovered systems</h2>{systemRows}</section>{proxmoxPanel}</> :
-      page === 'Integrations' ? <section className="panel">
+      page === 'Integrations' ? <> <section className="panel">
         <div className="panel-title"><h2>Proxmox VE connections</h2><span className={statusClass(proxmox.state)}>{proxmox.state}</span></div>
         <p className="panel-copy">Manage multiple independent Proxmox installations through your local <code>config/proxmox-instances.json</code> file. Each server has its own read-only API token and optional CA certificate.</p>
         <p className="panel-copy muted">Last checked: {proxmox.checkedAt ? new Date(proxmox.checkedAt).toLocaleString() : 'never'} · Credentials are never sent to the browser.</p>
@@ -184,7 +193,17 @@ export default function App() {
           <span className={statusClass(instance.state)}>{instance.state}</span>
         </div>)}
         <div className="mini-stats"><span><Database size={15}/> {proxmox.nodes.length} nodes</span><span><HardDrive size={15}/> {proxmox.guests.length} guests</span></div>
-      </section> :
+      </section>
+      <section className="panel">
+        <div className="panel-title">
+          <div><h2>Infisical secrets</h2><p>Self-hosted Machine Identity · Universal Auth</p></div>
+          <span className={statusClass(infisical.state)}>{infisical.state}</span>
+        </div>
+        <p className="panel-copy">Proxmox API tokens are retrieved by secret reference and kept in backend memory. Credentials are never returned to the browser or stored in SQLite.</p>
+        <p className="panel-copy muted">Last checked: {infisical.lastCheckedAt ? new Date(infisical.lastCheckedAt).toLocaleString() : 'never'}</p>
+        {infisical.message && <div className="notice"><TriangleAlert size={17}/>{infisical.message}</div>}
+        {!infisical.configured && <div className="empty">Infisical is not configured. Set Machine Identity credentials in your local deployment environment.</div>}
+      </section> </> :
       page === 'Events' ? <section className="panel"><h2>Events</h2>{events.length ? events.map(e => <div className="row" key={e.id}><strong>{e.message}</strong><span>{e.severity} · {e.created_at}</span></div>) : <div className="empty">No events recorded yet.</div>}</section> :
       page === 'Discoveries' ? <section className="panel"><h2>Discovered infrastructure</h2>{systemRows}</section> :
       <section className="panel"><h2>{page}</h2><div className="empty">This module will be enabled in a later sprint.</div></section>}
