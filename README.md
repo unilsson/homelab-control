@@ -78,58 +78,104 @@ The playbook checks the local `.env`, updates the remote working tree to `main`,
 
 If `thinkpad` is not resolvable from the laptop, edit `ansible/inventory.ini` and set `ansible_host` to ThinkPad's reachable IP address.
 
-## Sprint 2 — Read-only Proxmox discovery (development)
+## Sprint 2 — Read-only Proxmox discovery (multi-server)
 
-Sprint 2 adds discovery of **Proxmox nodes, QEMU VMs and LXC containers** and displays
-their status, CPU and memory in Dashboard / Systems / Integrations. Discovered entries
-are upserted into the existing SQLite `systems` table. Status changes are added to
-the `events` table. Proxmox integration is optional: if not configured, existing
-functionality remains unchanged.
+Sprint 2 discovers **multiple Proxmox installations independently**. Each configured
+connection has its own stable ID, display name, HTTPS origin, read-only API token and
+optional CA certificate. The dashboard groups nodes, QEMU VMs and LXC containers under
+their respective Proxmox installation and shows independent connection health.
 
-Only **GET** requests are made to Proxmox. No VM, LXC or node actions are available.
+The API endpoint `GET /api/integrations/proxmox` returns both aggregated arrays
+(`nodes`, `guests`) and an `instances` array containing per-server status and data.
+If one server is unreachable, the other still appears normally. Existing SQLite
+records for the unreachable instance are preserved and marked `unknown` rather
+than falsely `offline`.
 
-### Create a dedicated read-only Proxmox API token
+**Clusters:** One Proxmox cluster is normally monitored through a single API
+endpoint; the API exposes all nodes in that cluster. Configure **one entry per
+independent cluster or standalone installation**, not two entries pointing at
+different nodes of the same cluster (that would duplicate inventory). Redundant
+cluster endpoints/failover are a later feature.
 
-In Proxmox: Datacenter → Permissions → Users / API Tokens. Prefer a dedicated service
-user (e.g. `homelab@pve`) and a privilege-separated token named `discovery`.
+### Create read-only credentials
 
-Give that user and token appropriate **audit-only** permissions to read the relevant
-nodes and guests (the built-in `PVEAuditor` role is a convenient starting point).
-For privilege-separated tokens, both the underlying user and the token need
-permissions. Do not assign administrative or power-management privileges.
+For **each independent Proxmox installation**, create a dedicated service user
+and a privilege-separated API token in the Proxmox UI (Datacenter → Permissions).
+Give the user and its token the `PVEAuditor` role with appropriate audit-only
+permissions to view nodes and VMs (e.g., with inheritance at `/` for full
+inventory). For separated tokens **both the user and the token** must have
+permissions. Never use a root/admin token for this integration.
 
-The API-token ID has the format `homelab@pve!discovery`, and the token secret is
-the one-time value returned by Proxmox. Do not paste either secret into GitHub.
+Tokens look like `monitor@pve!discovery`; the secret is the one-time generated
+value. Token secrets are not stored in the repository or sent to the browser.
 
-### Configure the local development laptop
-
-Switch to the `sprint-2-proxmox-discovery` branch and update your **local** `.env`
-(do not replace a working `.env` with `.env.example`):
-
-```dotenv
-FRONTEND_PORT=8080
-BACKEND_PORT=3001
-PROXMOX_URL=https://YOUR-PROXMOX-HOSTNAME:8006
-PROXMOX_TOKEN_ID=homelab@pve!discovery
-PROXMOX_TOKEN_SECRET=YOUR-SECRET
-PROXMOX_CA_PATH=/app/certs/proxmox-ca.pem
-```
-
-Use the Proxmox hostname appearing in its HTTPS certificate. The backend validates
-TLS certificates by default, including hostnames. For the default Proxmox internal
-certificate, **copy only the public CA certificate** from
-`/etc/pve/pve-root-ca.pem` on a Proxmox node into
-`certs/proxmox-ca.pem` in the project directory. Never copy the CA private key.
-For example, with a Proxmox SSH account that can read that public file:
+### Configure both servers on your Lenovo (NOT GitHub)
 
 ```bash
-ssh YOUR-PROXMOX-SSH-USER@YOUR-PROXMOX-HOST 'cat /etc/pve/pve-root-ca.pem' > certs/proxmox-ca.pem
+cd ~/Development/homelab-control
+git switch sprint-2-proxmox-discovery
+cp config/proxmox-instances.example.json config/proxmox-instances.json
+nano config/proxmox-instances.json
 ```
 
-If you already use a publicly trusted certificate on Proxmox, leave
-`PROXMOX_CA_PATH` empty. The certificate files in `certs/` are excluded
-from Git. The URL, credentials and CA path are passed only to the Docker
-backend; no token secret is returned by the frontend API.
+Each entry has its own name, address and token; use the example as a template:
+
+```json
+[
+  {
+    "id": "pve-a",
+    "name": "Proxmox A",
+    "url": "https://proxmox-a.example:8006",
+    "tokenId": "monitor@pve!discovery",
+    "tokenSecret": "SECRET_FROM_SERVER_A",
+    "caPath": "/app/certs/proxmox-a-ca.pem"
+  },
+  {
+    "id": "pve-b",
+    "name": "Proxmox B",
+    "url": "https://proxmox-b.example:8006",
+    "tokenId": "monitor@pve!discovery",
+    "tokenSecret": "SECRET_FROM_SERVER_B",
+    "caPath": "/app/certs/proxmox-b-ca.pem"
+  }
+]
+```
+
+Use stable **unique IDs** and do not change them after data has been discovered;
+otherwise resources would be inserted as new identities. VM 100 on server A is
+not the same resource as VM 100 on server B.
+
+In the Lenovo's existing local `.env`, add:
+
+```dotenv
+PROXMOX_INSTANCES_FILE=/app/config/proxmox-instances.json
+```
+
+Keep the existing `FRONTEND_PORT` and `BACKEND_PORT` values. The secret JSON
+file is ignored by `.gitignore` and mounted read-only into the backend
+container. Never use `git add -f` to add it, and do not paste secrets into
+issues, screenshots or logs.
+
+### TLS certificate trust
+
+The HTTPS certificate hostname must match the hostname in `url`. For
+Proxmox's internal CA, transfer **only the public certificate** from
+`/etc/pve/pve-root-ca.pem` on the corresponding host to
+`certs/proxmox-a-ca.pem` and `certs/proxmox-b-ca.pem` on your Lenovo.
+Both are ignored by Git. For public CA-signed certificates, **omit `caPath`**
+for that instance.
+
+Example (requires Proxmox SSH access to read its public CA certificate):
+
+```bash
+ssh PROXMOX_A_SSH 'cat /etc/pve/pve-root-ca.pem' > certs/proxmox-a-ca.pem
+ssh PROXMOX_B_SSH 'cat /etc/pve/pve-root-ca.pem' > certs/proxmox-b-ca.pem
+```
+
+The application never disables certificate validation and never uses
+insecure TLS. **Never copy the private CA key** to this repository.
+
+### Build and test
 
 ```bash
 docker compose up -d --build
@@ -137,18 +183,24 @@ curl -s http://localhost:3001/api/integrations/proxmox
 curl -s http://localhost:3001/api/systems
 ```
 
-The API returns `state: disabled` when unconfigured, `online` on success,
-`partial` if guest lists cannot all be read, or `error` if Proxmox is unreachable,
-TLS validation fails or permissions are wrong. An upstream error does not break
-`/api/health` or `/api/systems` and does not delete previous inventory.
-The backend polls about once a minute and caches responses for 30 seconds.
+Adjust port 3001 if you have a different local `BACKEND_PORT`. Open
+`http://localhost:8080` (or your selected `FRONTEND_PORT`).
 
-### Production deployment
+The combined status is `online` if all configured instances can be read,
+`partial` if some fail, `error` if all fail, and `disabled` when none are
+configured. Each instance reports its own state and errors. Guest-list permission
+failures show `partial` for that instance while keeping other data visible.
 
-**Do not configure Proxmox access on ThinkPad yet** until the sprint branch has been
-tested and merged. ThinkPad keeps its own `.env` (with `BACKEND_PORT=3002`)
-and its existing `data/` database. After approval, deploy `main` with the
-Ansible playbook.
+The legacy single-server `PROXMOX_URL` / `PROXMOX_TOKEN_ID` /
+`PROXMOX_TOKEN_SECRET` environment variables continue to work as a fallback,
+but `PROXMOX_INSTANCES_FILE` takes precedence. Empty configuration means the
+integration is disabled and Sprint 1 functionality continues to work.
 
-**Security:** The application still has no login. Limit access to a trusted LAN
-and do not expose its ports on the internet.
+### Deployment and safety
+
+No Proxmox API tokens are committed to Git. ThinkPad runs `main` and remains
+unchanged until this sprint is approved. The ThinkPad Ansible playbook deploys
+application code but does not copy your private instance configuration. When
+ready for production, configure it separately on the ThinkPad.
+
+The application itself still has no login and must remain on a trusted LAN.
