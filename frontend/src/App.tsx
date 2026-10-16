@@ -30,6 +30,10 @@ type SecretProviderStatus = {
   state: 'disabled' | 'idle' | 'online' | 'degraded' | 'error';
   lastCheckedAt: string | null; message?: string;
 };
+type OpnsenseStatus = {
+  configured: boolean; state: 'disabled' | 'idle' | 'online' | 'error';
+  lastCheckedAt: string | null; message?: string;
+};
 type Page = 'Dashboard' | 'Systems' | 'Services' | 'Actions' | 'Proxmox' | 'LAN' | 'Events' | 'Discoveries' | 'Analysis' | 'Integrations';
 
 const sections: { label: string; pages: Page[] }[] = [
@@ -77,6 +81,7 @@ export default function App() {
   const [events, setEvents] = useState<Event[]>([]);
   const [proxmox, setProxmox] = useState<ProxmoxInventory>(defaultInventory);
   const [infisical, setInfisical] = useState<SecretProviderStatus>({ provider: 'infisical', configured: false, state: 'disabled', lastCheckedAt: null });
+  const [opnsense, setOpnsense] = useState<OpnsenseStatus>({ configured: false, state: 'disabled', lastCheckedAt: null });
   const [loading, setLoading] = useState(true);
   const [apiError, setApiError] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
@@ -86,20 +91,22 @@ export default function App() {
     const controller = new AbortController();
     const load = async () => {
       try {
-        const [healthResponse, systemsResponse, eventsResponse, proxmoxResponse, infisicalResponse] = await Promise.all([
+        const [healthResponse, systemsResponse, eventsResponse, proxmoxResponse, infisicalResponse, opnsenseResponse] = await Promise.all([
           fetch('/api/health', { signal: controller.signal }),
           fetch('/api/systems', { signal: controller.signal }),
           fetch('/api/events', { signal: controller.signal }),
           fetch('/api/integrations/proxmox', { signal: controller.signal }),
-          fetch('/api/integrations/infisical', { signal: controller.signal })
+          fetch('/api/integrations/infisical', { signal: controller.signal }),
+          fetch('/api/integrations/opnsense', { signal: controller.signal })
         ]);
-        if (![healthResponse, systemsResponse, eventsResponse, proxmoxResponse, infisicalResponse].every(r => r.ok)) throw new Error('API unavailable');
-        const [health, newSystems, newEvents, newProxmox, newInfisical] = await Promise.all([
+        if (![healthResponse, systemsResponse, eventsResponse, proxmoxResponse, infisicalResponse, opnsenseResponse].every(r => r.ok)) throw new Error('API unavailable');
+        const [health, newSystems, newEvents, newProxmox, newInfisical, newOpnsense] = await Promise.all([
           healthResponse.json() as Promise<{ status: string }>,
           systemsResponse.json() as Promise<System[]>,
           eventsResponse.json() as Promise<Event[]>,
           proxmoxResponse.json() as Promise<ProxmoxInventory>,
-          infisicalResponse.json() as Promise<SecretProviderStatus>
+          infisicalResponse.json() as Promise<SecretProviderStatus>,
+          opnsenseResponse.json() as Promise<OpnsenseStatus>
         ]);
         if (controller.signal.aborted) return;
         setOnline(health.status === 'ok');
@@ -107,6 +114,7 @@ export default function App() {
         setEvents(newEvents);
         setProxmox(newProxmox);
         setInfisical(newInfisical);
+        setOpnsense(newOpnsense);
         setApiError(false);
       } catch {
         if (!controller.signal.aborted) { setOnline(false); setApiError(true); }
@@ -248,10 +256,20 @@ export default function App() {
       </section>
       <section className="panel">
         <div className="panel-title">
+          <div><h2>OPNsense DHCP</h2><p>LAN inventory · Infisical Machine Identity</p></div>
+          <span className={statusClass(opnsense.state)}>{opnsense.state}</span>
+        </div>
+        <p className="panel-copy">Read-only DHCP lease and static reservation data are combined with lanscan ARP results. OPNsense API credentials are retrieved from Infisical in backend memory.</p>
+        <p className="panel-copy muted">Last checked: {opnsense.lastCheckedAt ? new Date(opnsense.lastCheckedAt).toLocaleString() : 'never'} · API credentials are never sent to the browser.</p>
+        {opnsense.message && <div className="notice"><TriangleAlert size={17}/><span>{opnsense.message}</span></div>}
+        {!opnsense.configured && <div className="empty">Set LANSCAN_WITH_OPNSENSE=true, LANSCAN_OPNSENSE_URL and the two Infisical secret references to enable DHCP correlation.</div>}
+      </section>
+      <section className="panel">
+        <div className="panel-title">
           <div><h2>Infisical secrets</h2><p>Self-hosted Machine Identity · Universal Auth</p></div>
           <span className={statusClass(infisical.state)}>{infisical.state}</span>
         </div>
-        <p className="panel-copy">Proxmox API tokens are retrieved by secret reference and kept in backend memory. Credentials are never returned to the browser or stored in SQLite.</p>
+        <p className="panel-copy">Proxmox API tokens and OPNsense API credentials are retrieved by secret reference and kept in backend memory. Credentials are never returned to the browser or stored in SQLite.</p>
         <p className="panel-copy muted">Last checked: {infisical.lastCheckedAt ? new Date(infisical.lastCheckedAt).toLocaleString() : 'never'}</p>
         {infisical.message && <div className="notice"><TriangleAlert size={17}/>{infisical.message}</div>}
         {!infisical.configured && <div className="empty">Infisical is not configured. Set Machine Identity credentials in your local deployment environment.</div>}
