@@ -9,7 +9,7 @@ const refreshMs = 5 * 60_000;
 const maxStaleMs = 60 * 60_000;
 
 type CachedValue = { value: string; fetchedAt: number };
-type PublicState = 'disabled' | 'online' | 'degraded' | 'error';
+type PublicState = 'disabled' | 'idle' | 'online' | 'degraded' | 'error';
 
 export type SecretProviderStatus = {
   provider: 'infisical';
@@ -70,10 +70,17 @@ function readConfig(): InfisicalConfig {
 }
 
 export function getInfisicalStatus(): SecretProviderStatus {
+  const configured = Boolean(
+    process.env.INFISICAL_SITE_URL?.trim() &&
+    process.env.INFISICAL_PROJECT_ID?.trim() &&
+    process.env.INFISICAL_CLIENT_ID?.trim() &&
+    (process.env.INFISICAL_CLIENT_SECRET_FILE?.trim() ||
+      process.env.INFISICAL_CLIENT_SECRET?.trim())
+  );
   return {
     provider: 'infisical',
-    configured: Boolean(process.env.INFISICAL_SITE_URL?.trim()),
-    state,
+    configured,
+    state: !configured ? 'disabled' : state === 'disabled' ? 'idle' : state,
     lastCheckedAt,
     ...(message ? { message } : {})
   };
