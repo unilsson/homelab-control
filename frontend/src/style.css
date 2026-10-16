@@ -99,3 +99,14 @@
 .sr-only{position:absolute;width:1px;height:1px;margin:-1px;padding:0;border:0;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap}
 @media(max-width:1050px){.lan-summary{grid-template-columns:repeat(4,minmax(0,1fr))}}
 @media(max-width:600px){.lan-summary{grid-template-columns:repeat(2,minmax(0,1fr))}.lan-toolbar{align-items:stretch}.lan-search{max-width:none;min-width:0}}
+
+/* Host-mediated manual LAN scan controls */
+.lan-header-actions{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.lan-scan-button{font-size:12px;min-height:35px}
+.lan-scan-button:disabled{opacity:.45;cursor:not-allowed;border-color:#394354}
+.lan-scan-button:disabled:hover{background:#202a39;color:#c5d2e5;border-color:#394354}
+.lan-scan-status{font-size:12px;color:#a5b2c5;margin:-8px 0 16px;line-height:1.5}
+@keyframes lan-rotate{to{transform:rotate(360deg)}}
+.lan-spin{animation:lan-rotate 1.3s linear infinite}
+@media(prefers-reduced-motion:reduce){.lan-spin{animation:none}}
+@media(max-width:730px){.lan-header-actions{width:100%;justify-content:space-between}}
