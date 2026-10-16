@@ -18,3 +18,7 @@ config/*
 # Infisical machine identity bootstrap credentials
 secrets/*
 !secrets/.gitkeep
+
+# Python host-side worker test artifacts
+__pycache__/
+*.pyc
