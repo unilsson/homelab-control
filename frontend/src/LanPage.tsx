@@ -21,7 +21,7 @@ type LanInventory = {
   results: LanAddress[]; scan: ScanInfo; message?: string;
 };
 type ScanInfo = {
-  state: 'unavailable' | 'idle' | 'queued' | 'running' | 'completed' | 'failed';
+  state: 'unavailable' | 'idle' | 'running' | 'completed' | 'failed';
   available: boolean;
   requestedAt: string | null;
   startedAt: string | null;
@@ -82,7 +82,7 @@ export default function LanPage({ refreshKey }: { refreshKey: number }) {
         if (!mounted || active.signal.aborted) return;
         setInventory(data);
         setFetchError(false);
-        delay = data.scan?.state === 'queued' || data.scan?.state === 'running' ? 3_000 : 30_000;
+        delay = data.scan?.state === 'running' ? 3_000 : 30_000;
       } catch {
         if (mounted && !active.signal.aborted) setFetchError(true);
         delay = 10_000;
@@ -101,9 +101,8 @@ export default function LanPage({ refreshKey }: { refreshKey: number }) {
     };
   }, [refreshKey, scanRefresh]);
 
-  const scanBusy = inventory.scan.state === 'queued' || inventory.scan.state === 'running';
-  const scanStatus = inventory.scan.state === 'queued' ? 'Queued (starts within about a minute)'
-    : inventory.scan.state === 'running' ? 'Scanning the LAN…'
+  const scanBusy = inventory.scan.state === 'running';
+  const scanStatus = inventory.scan.state === 'running' ? 'Scanning the LAN…'
     : inventory.scan.state === 'completed' ? 'Last scan completed'
     : inventory.scan.state === 'failed' ? 'Last scan failed'
     : inventory.scan.state === 'unavailable' ? 'Host scanner unavailable'
@@ -157,9 +156,9 @@ export default function LanPage({ refreshKey }: { refreshKey: number }) {
         <button type="button" className="instance-toggle lan-scan-button"
           disabled={requesting || scanBusy || !inventory.scan.available}
           onClick={() => { void scanNow(); }}
-          title={!inventory.scan.available ? 'Enable the host-side homelab-lanscan timer to scan now' : undefined}>
+          title={!inventory.scan.available ? 'LAN scanning must be enabled in the backend' : undefined}>
           <RefreshCw size={15} aria-hidden="true" className={inventory.scan.state === 'running' ? 'lan-spin' : ''} />
-          {requesting ? 'Requesting…' : scanBusy ? 'Scan pending…' : 'Scan now'}
+          {requesting ? 'Starting…' : scanBusy ? 'Scanning…' : 'Scan now'}
         </button>
         <span className={'status ' + (inventory.state === 'online' ? 'good' : inventory.state === 'stale' ? 'caution' : 'neutral')}>{inventory.state}</span>
       </div>
@@ -169,10 +168,8 @@ export default function LanPage({ refreshKey }: { refreshKey: number }) {
       <RefreshCw size={14} aria-hidden="true" /> Last result: {scannedAt}. {scanStatus}.
     </p>
     <div className="lan-scan-status" role="status" aria-live="polite">
-      {scanBusy && <span>{inventory.scan.state === 'queued'
-        ? 'The host worker will pick up the request shortly.'
-        : 'ARP and DHCP discovery are in progress. The table shows the previous scan until completion.'}</span>}
-      {!inventory.scan.available && <span>To enable Scan now, start the host-side homelab-lanscan timer.</span>}
+      {scanBusy && <span>ARP and DHCP discovery are in progress. The table shows the previous scan until completion.</span>}
+      {!inventory.scan.available && <span>LAN scanning is disabled in the backend configuration.</span>}
     </div>
     {requestError && <div className="notice"><AlertTriangle size={17} /><span>{requestError}</span></div>}
     {inventory.scan.state === 'failed' && inventory.scan.message &&
