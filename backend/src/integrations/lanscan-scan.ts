@@ -1,8 +1,13 @@
+import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { readFile, stat, writeFile, rename, unlink } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { mkdir, rename, unlink, writeFile } from 'node:fs/promises';
+import { dirname } from 'node:path';
+import { promisify } from 'node:util';
+import { parseLanSnapshot } from './lanscan.js';
 
-export type ScanState = 'unavailable' | 'idle' | 'queued' | 'running' | 'completed' | 'failed';
+const execFileAsync = promisify(execFile);
+
+export type ScanState = 'unavailable' | 'idle' | 'running' | 'completed' | 'failed';
 export type LanScanInfo = {
   state: ScanState;
   available: boolean;
@@ -11,144 +16,130 @@ export type LanScanInfo = {
   finishedAt: string | null;
   message?: string;
 };
+export type ScanResponse = { httpStatus: 202 | 409 | 429 | 503; scan: LanScanInfo };
 
-type ScanRequest = { id: string; requestedAt: string };
-type WorkerStatus = {
-  requestId: string | null;
-  state: 'running' | 'completed' | 'failed';
-  startedAt: string;
-  requestedAt: string | null;
-  finishedAt: string | null;
+type CommandOutput = { stdout: string };
+type Execute = (binary: string, args: string[], options: { timeout: number; maxBuffer: number }) => Promise<CommandOutput>;
+
+type ScannerOptions = {
+  enabled: boolean;
+  network: string;
+  snapshotPath: string;
+  command: string;
+  withOpnsense: boolean;
+  execute: Execute;
+  now: () => number;
 };
 
-const heartbeatMaxAge = 180_000; // Worker runs once per minute.
-const inProgressMaxAge = 240_000; // Worker scan timeout is 150 seconds.
-const manualCooldown = 90_000;
+const limits = {
+  timeoutMs: 150_000,
+  maxBufferBytes: 4_000_000,
+  cooldownMs: 90_000,
+  automaticIntervalMs: 15 * 60_000
+};
 
-export function scanDataDir(): string {
-  return dirname(process.env.LANSCAN_SNAPSHOT_FILE?.trim() || '/app/data/lanscan.json');
-}
+const defaultOptions: ScannerOptions = {
+  enabled: process.env.LANSCAN_ENABLED === 'true',
+  network: process.env.LANSCAN_NETWORK?.trim() || '192.168.1.0/24',
+  snapshotPath: process.env.LANSCAN_SNAPSHOT_FILE?.trim() || '/app/data/lanscan.json',
+  command: '/opt/lanscan/bin/lanscan',
+  withOpnsense: process.env.LANSCAN_WITH_OPNSENSE === 'true',
+  execute: (binary, args, options) => execFileAsync(binary, args, options),
+  now: Date.now
+};
 
-function paths(dir: string) {
-  return {
-    heartbeat: join(dir, 'lanscan-worker-heartbeat'),
-    request: join(dir, 'lanscan-request.json'),
-    status: join(dir, 'lanscan-status.json')
-  };
-}
+export class LanScanner {
+  private readonly options: ScannerOptions;
+  private requestedAtMs: number | null = null;
+  private current: LanScanInfo;
 
-async function jsonFile(path: string): Promise<unknown | null> {
-  try {
-    const value = await readFile(path, 'utf8');
-    if (value.length > 4096) return null;
-    return JSON.parse(value) as unknown;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
-    return null;
-  }
-}
-
-function validTime(time: unknown): time is string {
-  return typeof time === 'string' && Number.isFinite(Date.parse(time));
-}
-
-function parseRequest(value: unknown): ScanRequest | null {
-  if (!value || typeof value !== 'object') return null;
-  const v = value as Record<string, unknown>;
-  if (typeof v.id !== 'string' || !/^[0-9a-f-]{36}$/i.test(v.id) || !validTime(v.requestedAt)) return null;
-  return { id: v.id, requestedAt: v.requestedAt };
-}
-
-function parseStatus(value: unknown): WorkerStatus | null {
-  if (!value || typeof value !== 'object') return null;
-  const v = value as Record<string, unknown>;
-  if (v.requestId !== null && (typeof v.requestId !== 'string' || !/^[0-9a-f-]{36}$/i.test(v.requestId))) return null;
-  if (v.state !== 'running' && v.state !== 'completed' && v.state !== 'failed') return null;
-  if (!validTime(v.startedAt) || (v.requestedAt !== null && !validTime(v.requestedAt)) ||
-      (v.finishedAt !== null && !validTime(v.finishedAt))) return null;
-  return {
-    requestId: v.requestId as string | null,
-    state: v.state,
-    startedAt: v.startedAt,
-    requestedAt: v.requestedAt as string | null,
-    finishedAt: v.finishedAt as string | null
-  };
-}
-
-export async function getLanScanInfo(dir = scanDataDir()): Promise<LanScanInfo> {
-  const file = paths(dir);
-  const [heartbeat, rawRequest, rawStatus] = await Promise.all([
-    stat(file.heartbeat).catch(() => null),
-    jsonFile(file.request),
-    jsonFile(file.status)
-  ]);
-  const available = Boolean(heartbeat?.isFile() && (Date.now() - heartbeat.mtimeMs < heartbeatMaxAge));
-  const request = parseRequest(rawRequest);
-  const status = parseStatus(rawStatus);
-  const base = {
-    available,
-    requestedAt: request?.requestedAt ?? status?.requestedAt ?? null,
-    startedAt: status?.startedAt ?? null,
-    finishedAt: status?.finishedAt ?? null
-  };
-  if (status?.state === 'running' && Date.now() - Date.parse(status.startedAt) < inProgressMaxAge) {
-    return { ...base, state: 'running', requestedAt: status.requestId === request?.id ? request.requestedAt : base.requestedAt };
-  }
-  if (request && (!status || status.requestId !== request.id) &&
-      Date.now() - Date.parse(request.requestedAt) < inProgressMaxAge) {
-    return { ...base, state: 'queued', requestedAt: request.requestedAt };
-  }
-  if (request && (!status || status.requestId !== request.id)) {
-    return { ...base, state: 'failed', message: 'Scan request was not processed. Check the host scanner timer.' };
-  }
-  if (status?.state === 'running') {
-    return { ...base, state: 'failed', message: 'Scan took too long. Check the host scanner log.' };
-  }
-  if (status?.state === 'failed') {
-    return { ...base, state: 'failed', message: 'Host-side scan failed. Check the host scanner log.' };
-  }
-  if (status?.state === 'completed') return { ...base, state: 'completed' };
-  return available
-    ? { ...base, state: 'idle' }
-    : { ...base, state: 'unavailable', message: 'Host scanner not active. Enable the homelab-lanscan user timer.' };
-}
-
-export type ScanRequestResponse = { httpStatus: 202 | 409 | 429 | 503; scan: LanScanInfo };
-
-// Requests only write a fixed-size marker. The backend never executes a command.
-let requestChain: Promise<void> = Promise.resolve();
-export function enqueueLanScan(dir = scanDataDir()): Promise<ScanRequestResponse> {
-  const work = requestChain.then(async (): Promise<ScanRequestResponse> => {
-    const info = await getLanScanInfo(dir);
-    if (!info.available) return { httpStatus: 503, scan: info };
-    if (info.state === 'running' || info.state === 'queued') {
-      return { httpStatus: 409, scan: info };
-    }
-    // Keep a cooldown even if a scan fails, to prevent repeated probing of the LAN.
-    const existing = parseRequest(await jsonFile(paths(dir).request));
-    const lastRequest = existing?.requestedAt ?? info.requestedAt;
-    if (lastRequest && Date.now() - Date.parse(lastRequest) < manualCooldown) {
-      return { httpStatus: 429, scan: { ...info, message: 'Wait at least 90 seconds between manual scans.' } };
-    }
-
-    const request: ScanRequest = { id: randomUUID(), requestedAt: new Date().toISOString() };
-    const target = paths(dir).request;
-    const temp = join(dir, '.lanscan-request-' + randomUUID() + '.tmp');
-    try {
-      await writeFile(temp, JSON.stringify(request) + '\n', { flag: 'wx', mode: 0o644 });
-      await rename(temp, target);
-    } finally {
-      await unlink(temp).catch(() => {});
-    }
-    return {
-      httpStatus: 202,
-      scan: {
-        state: 'queued', available: true, requestedAt: request.requestedAt,
-        startedAt: null, finishedAt: null,
-        message: 'Scan requested. The host worker starts within about one minute.'
-      }
+  constructor(options: ScannerOptions) {
+    this.options = options;
+    this.current = {
+      state: options.enabled ? 'idle' : 'unavailable',
+      available: options.enabled,
+      requestedAt: null,
+      startedAt: null,
+      finishedAt: null,
+      ...(!options.enabled ? { message: 'LAN scanning is disabled. Set LANSCAN_ENABLED=true in Docker Compose.' } : {})
     };
-  });
-  requestChain = work.then(() => {}, () => {});
-  return work;
+  }
+
+  info(): LanScanInfo { return { ...this.current }; }
+
+  /**
+   * Only the fixed, configured subnet can be scanned. Caller-supplied
+   * commands, flags, targets and payloads are not accepted.
+   */
+  requestScan(manual = true): ScanResponse {
+    if (!this.options.enabled) return { httpStatus: 503, scan: this.info() };
+    if (this.current.state === 'running') return { httpStatus: 409, scan: this.info() };
+
+    const now = this.options.now();
+    if (manual && this.requestedAtMs !== null && now - this.requestedAtMs < limits.cooldownMs) {
+      return {
+        httpStatus: 429,
+        scan: { ...this.info(), message: 'Wait at least 90 seconds between manual scans.' }
+      };
+    }
+    if (manual) this.requestedAtMs = now;
+    const requested = new Date(now).toISOString();
+    this.current = {
+      state: 'running', available: true, requestedAt: requested,
+      startedAt: requested, finishedAt: null
+    };
+    void this.run();
+    return { httpStatus: 202, scan: this.info() };
+  }
+
+  private async run(): Promise<void> {
+    const { command, network, withOpnsense, snapshotPath, execute, now } = this.options;
+    try {
+      // Verify the exact configured subnet BEFORE invoking the scanner.
+      // Validation of a complete JSON result repeats this check afterward.
+      // The parser checks network syntax using the supplied CIDR.
+      const args = [network, '--all', '--json', ...(withOpnsense ? ['--opnsense'] : [])];
+      const { stdout } = await execute(command, args, {
+        timeout: limits.timeoutMs, maxBuffer: limits.maxBufferBytes
+      });
+      if (Buffer.byteLength(stdout, 'utf8') > limits.maxBufferBytes) {
+        throw new Error('Scan result exceeds size limit');
+      }
+      const document: unknown = JSON.parse(stdout);
+      parseLanSnapshot(document, network);
+      const dir = dirname(snapshotPath);
+      await mkdir(dir, { recursive: true });
+      const tempPath = snapshotPath + '.tmp-' + randomUUID();
+      try {
+        await writeFile(tempPath, JSON.stringify(document) + '\n', {
+          encoding: 'utf8', flag: 'wx', mode: 0o600
+        });
+        await rename(tempPath, snapshotPath);
+      } finally {
+        await unlink(tempPath).catch(() => {});
+      }
+      this.current = {
+        ...this.current, state: 'completed', finishedAt: new Date(now()).toISOString()
+      };
+    } catch (error) {
+      // Never return stderr or API credentials to clients.
+      console.warn('[lanscan] Scan failed:', error instanceof Error ? error.name : 'unknown');
+      this.current = {
+        ...this.current, state: 'failed', finishedAt: new Date(now()).toISOString(),
+        message: 'LAN scan failed. Check Docker backend logs. Previous results are preserved.'
+      };
+    }
+  }
+
+  /** Automatic scans run inside the backend process; no cron or systemd. */
+  startAutomaticScans(): void {
+    if (!this.options.enabled) return;
+    setTimeout(() => { this.requestScan(false); }, 10_000).unref();
+    setInterval(() => { this.requestScan(false); }, limits.automaticIntervalMs).unref();
+  }
 }
+
+export const lanScanner = new LanScanner(defaultOptions);
+export const getLanScanInfo = (): LanScanInfo => lanScanner.info();
+export const requestLanScan = (): ScanResponse => lanScanner.requestScan();
+export const startLanScanner = (): void => lanScanner.startAutomaticScans();
