@@ -2,6 +2,7 @@ import express, { type ErrorRequestHandler } from 'express';
 import cors from 'cors';
 import { db } from './database.js';
 import { getProxmoxInventory } from './integrations/proxmox.js';
+import { getInfisicalStatus } from './integrations/infisical.js';
 
 const app = express();
 app.disable('x-powered-by');
@@ -19,6 +20,10 @@ app.get('/api/systems', async (_req, res, next) => {
     const systems = db.prepare('SELECT id, name, type, status, host, source, external_id, last_seen, created_at FROM systems ORDER BY type, name').all();
     res.json(systems);
   } catch (error) { next(error); }
+});
+
+app.get('/api/integrations/infisical', (_req, res) => {
+  res.json(getInfisicalStatus());
 });
 
 app.get('/api/integrations/proxmox', async (_req, res, next) => {
