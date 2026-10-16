@@ -22,10 +22,8 @@ jobs:
           npm run build --prefix backend
       - name: Test Proxmox discovery and LAN snapshots
         run: npm run test --prefix backend
-      - name: Validate LAN host worker and exporter
-        run: |
-          bash -n scripts/update-lanscan.sh
-          python3 -m unittest discover -s scripts -p 'test_*.py' -v
+      - name: Validate scanner shim syntax
+        run: sh -n backend/docker/sudo
       - name: Install and build frontend
         run: |
           npm install --prefix frontend
@@ -47,6 +45,16 @@ jobs:
           curl -fsS http://127.0.0.1:3199/api/integrations/proxmox | node -e "let b='';process.stdin.on('data',d=>b+=d).on('end',()=>{if(JSON.parse(b).state!=='disabled') process.exit(1)})"
           curl -fsS http://127.0.0.1:3199/api/systems | node -e "let b='';process.stdin.on('data',d=>b+=d).on('end',()=>{if(!Array.isArray(JSON.parse(b))) process.exit(1)})"
           curl -fsS http://127.0.0.1:3199/api/network/lan | node -e "let b='';process.stdin.on('data',d=>b+=d).on('end',()=>{const x=JSON.parse(b);if(x.state!=='missing'||!Array.isArray(x.results))process.exit(1)})"
-          # No host-side worker in CI, so scans must remain disabled.
+          # Outside Docker the scanner is disabled, so no scan executes in CI.
           test "$(curl -sS -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:3199/api/network/lan/scan)" = "503"
           test "$(curl -sS -o /dev/null -w '%{http_code}' -X POST -H 'Origin: https://another.example' http://127.0.0.1:3199/api/network/lan/scan)" = "403"
+      - name: Build direct scanner Docker image
+        run: docker compose build backend frontend
+      - name: Verify non-root backend and bundled lanscan
+        run: |
+          docker compose run --rm --no-deps --entrypoint /bin/sh backend -c '
+            test "$(id -un)" = node
+            /opt/lanscan/bin/lanscan --version
+            /usr/sbin/getcap /usr/bin/arp-scan | grep -q cap_net_raw
+            test -x /usr/local/bin/sudo
+          '
