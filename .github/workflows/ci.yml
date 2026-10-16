@@ -55,6 +55,6 @@ jobs:
           docker compose run --rm --no-deps --entrypoint /bin/sh backend -c '
             test "$(id -un)" = node
             /opt/lanscan/bin/lanscan --version
-            /usr/sbin/getcap /usr/bin/arp-scan | grep -q cap_net_raw
+            /usr/sbin/getcap "$(readlink -f /usr/local/bin/arp-scan)" | grep -q cap_net_raw
             test -x /usr/local/bin/sudo
           '
