@@ -1,4 +1,5 @@
 import { readFile, stat } from 'node:fs/promises';
+import type { DhcpLease } from './opnsense.js';
 
 export type LanStatus = 'used' | 'free' | 'leased' | 'reserved' | 'conflict';
 export type LanDevice = { mac: string; vendor: string };
@@ -118,6 +119,53 @@ export function parseLanSnapshot(payload: unknown, network: string): Pick<LanInv
     },
     results
   };
+}
+
+
+/**
+ * Merge OPNsense ISC DHCP observations with ARP results. ARP observations
+ * take precedence for reachability/conflicts; DHCP static mappings protect
+ * sleeping devices from being incorrectly labeled FREE.
+ *
+ * On OPNsense failure callers MUST reject the entire scan. Writing an
+ * ARP-only fallback would incorrectly replace RESERVED/LEASED with FREE.
+ */
+export function mergeOpnsenseLeases(
+  arpDocument: unknown, network: string, leases: DhcpLease[]
+): { schema_version: 1; results: LanAddress[] } {
+  const raw = parseLanSnapshot(arpDocument, network);
+  const subnet = networkSpec(network);
+  const filtered = new Map<string, DhcpLease>();
+  for (const lease of leases) {
+    const address = ipv4Number(lease.ip);
+    if (address === null || address < subnet.first || address > subnet.last) continue;
+    const previous = filtered.get(lease.ip);
+    if (!previous || lease.isStatic || !previous.isStatic) filtered.set(lease.ip, lease);
+  }
+
+  const results = raw.results.map(row => {
+    const lease = filtered.get(row.ip);
+    if (!lease) return row;
+    const status: LanStatus = row.status === 'free'
+      ? (lease.isStatic ? 'reserved' : 'leased')
+      : row.status;
+    return {
+      ...row,
+      status,
+      hostname: row.hostname || lease.hostname,
+      lease: {
+        mac: lease.mac,
+        hostname: lease.hostname,
+        description: lease.description,
+        manufacturer: lease.manufacturer,
+        type: lease.type
+      }
+    };
+  });
+  const combined = { schema_version: 1 as const, results };
+  // Recheck the complete address-space and status invariants before saving.
+  parseLanSnapshot(combined, network);
+  return combined;
 }
 
 export async function readLanInventory(
