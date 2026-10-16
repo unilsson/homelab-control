@@ -368,40 +368,95 @@ curl -fsS http://localhost:3001/api/network/lan |
 
 On ThinkPad, use port `3002`.
 
-### Optional OPNsense DHCP correlation
+### OPNsense DHCP integration through Infisical
 
-By default `LANSCAN_WITH_OPNSENSE=false`; ARP and DNS are available out
-of the box, but offline static reservations cannot be identified.
-If you want accurate `LEASED` and `RESERVED` states, give the scanner
-the read-only OPNsense DHCP configuration you already use with `lanscan`:
+For complete inventory coverage, Homelab Control combines two read-only
+sources:
 
-```bash
-cd ~/Development/homelab-control
-cp ~/.config/lanscan/config.toml secrets/lanscan-config.toml
-chmod 600 secrets/lanscan-config.toml
-```
+- **lanscan** runs ARP and reverse-DNS discovery in Docker; this requires
+  no OPNsense credentials.
+- **Homelab Control backend** uses the existing Infisical Machine Identity
+  to retrieve **two secrets in memory**. It then calls the **read-only
+  OPNsense ISC DHCPv4 lease API** over verified HTTPS, and correlates
+  dynamic leases and static DHCP reservations with the ARP results.
 
-In the machine's **local** `.env`, set:
+**The OPNsense API key and secret never appear in `.env`, Docker process
+arguments, the Python CLI, local config files, SQLite, or the browser.**
+Existing Infisical settings used for the Proxmox integration are reused;
+you do not need a second Infisical client.
 
-```text
+#### 1. Create secrets in Infisical
+
+In the same Infisical project, environment (`INFISICAL_ENV`) and path
+(`INFISICAL_SECRET_PATH`) that Homelab Control already uses, add:
+
+| Infisical secret name | Value |
+| --- | --- |
+| `OPNSENSE_API_KEY` | Your read-only OPNsense API key |
+| `OPNSENSE_API_SECRET` | The corresponding OPNsense API secret |
+
+The existing Machine Identity must have **read permission** for both
+secrets. OPNsense's API user needs only the ISC DHCPv4 lease read
+permission. **Do not paste these secret values into a GitHub file, a chat
+message or Docker environment variables.**
+
+#### 2. Configure connection metadata only
+
+In each machine's **local** `.env`:
+
+```dotenv
 LANSCAN_NETWORK=192.168.1.0/24
 LANSCAN_WITH_OPNSENSE=true
+LANSCAN_OPNSENSE_URL=https://opnsense.ulnihnw.net
+LANSCAN_OPNSENSE_API_KEY_REF=OPNSENSE_API_KEY
+LANSCAN_OPNSENSE_API_SECRET_REF=OPNSENSE_API_SECRET
+# Optional: public CA if OPNsense's HTTPS certificate uses a private CA
+# LANSCAN_OPNSENSE_CA_PATH=/app/certs/opnsense-ca.pem
 ```
 
-The file is Git-ignored and mounted through the existing **read-only**
-`./secrets:/app/secrets` volume. The image links the CLI's default
-`~/.config/lanscan/config.toml` path to
-`/app/secrets/lanscan-config.toml`. The file must be readable by the
-container's `node` user (UID 1000 on the standard Node image).
-Do **not** put API keys in `.env`, GitHub, logs or browser responses.
-Restart the backend after changing `.env`:
+Use the real HTTPS hostname for your OPNsense firewall. The certificate
+**must match that hostname**. Normal CA validation stays enabled.
+If OPNsense uses its own CA, install **only its public CA certificate**
+as `./certs/opnsense-ca.pem` and set `LANSCAN_OPNSENSE_CA_PATH`
+as shown. This public certificate is mounted via the existing read-only
+`./certs:/app/certs` volume. We do **not** allow `verify_tls=false` or
+`NODE_TLS_REJECT_UNAUTHORIZED=0`.
+
+Then restart the backend to load the updated environment:
 
 ```bash
 docker compose up -d --force-recreate backend
 ```
 
-The same file/configuration is needed separately on ThinkPad after approval;
-Ansible does **not** copy local secrets.
+#### 3. Test safely
+
+Open **NETWORK → LAN → Scan now**, then check:
+
+```bash
+curl -fsS http://localhost:3001/api/integrations/opnsense | jq
+curl -fsS http://localhost:3001/api/network/lan |
+  jq '{state, scannedAt, summary, scan}'
+```
+
+Use port **3002** on ThinkPad. The OPNsense connection also appears under
+**SETTINGS → Integrations**. Only connection status and last-check time
+are exposed.
+
+Addresses with an active OPNsense dynamic lease but no ARP response are
+`LEASED`; offline static DHCP mappings are `RESERVED`. A device
+answering ARP is `USED` or `CONFLICT` regardless of lease type.
+
+**Fail-closed behavior:** When OPNsense mode is enabled and either
+Infisical secret retrieval, HTTPS/TLS validation or the DHCP API fails,
+the scan reports **Failed** and preserves the previous good inventory.
+We deliberately do not replace it with an ARP-only snapshot that could
+incorrectly mark reserved addresses `FREE`.
+
+During troubleshooting, `LANSCAN_WITH_OPNSENSE=false` is an optional
+temporary ARP-only mode, but free-address classification is less reliable
+without OPNsense reservations. The Infisical client already caches
+successfully retrieved secrets for 5 minutes and has a bounded 1-hour
+in-memory stale fallback during brief Infisical outages.
 
 ### Troubleshooting
 
@@ -413,8 +468,9 @@ curl -s http://localhost:3001/api/network/lan | jq '.scan'
 
 If scans fail, check that the host has access to the intended LAN and
 supports Docker host networking. If enabling OPNsense makes scans fail,
-check the mounted credentials, TLS settings and OPNsense API reachability.
-You can revert to `LANSCAN_WITH_OPNSENSE=false` for an ARP-only test.
+check the Infisical secret references and Machine Identity read permissions,
+OPNsense API user privileges, TLS CA/hostname and HTTPS reachability.
+You can temporarily set `LANSCAN_WITH_OPNSENSE=false` for an ARP-only test.
 
 If you previously configured the *unmerged, older* systemd worker approach
 on Lenovo, it is no longer needed. You may disable and remove its user
