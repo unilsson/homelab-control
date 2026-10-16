@@ -1,0 +1,10 @@
+#!/bin/sh
+# Compatibility adapter for unilsson/lanscan, which invokes sudo arp-scan.
+# This does NOT elevate privileges. File capabilities on arp-scan provide
+# CAP_NET_RAW only. Disallow any other command or scan target.
+set -eu
+if [ "$#" -ne 2 ] || [ "$1" != "arp-scan" ] || [ "$2" != "${LANSCAN_NETWORK:-192.168.1.0/24}" ]; then
+  echo "Only the configured LAN subnet may be scanned" >&2
+  exit 2
+fi
+exec /usr/bin/arp-scan "$2"
