@@ -309,7 +309,15 @@ additional scanner built into Homelab Control. Its versioned
 `lanscan 192.168.1.0/24 --all --opnsense --json` output is saved to the host's
 `data/lanscan.json`. Docker already bind-mounts `./data:/app/data`; the
 backend only **reads** this JSON at `GET /api/network/lan`.
-The JSON contains no OPNsense API credentials. **No Docker host networking,
+The JSON contains no OPNsense API credentials. The **Scan now** button uses
+`POST /api/network/lan/scan` to write a fixed, rate-limited request marker;
+the unprivileged **host-side worker** does the actual network scanning.
+Requests are collected within about 1 minute; automatic scans continue every
+15 minutes. The page polls status every 3 seconds while a scan is queued or
+running, and retains the previous snapshot until a new scan succeeds.
+The host worker must be active or **Scan now** is disabled.
+
+**No Docker host networking,
 NET_RAW, sudo, or OPNsense secrets are needed inside the container.**
 
 `LANSCAN_NETWORK=192.168.1.0/24` in the host's `.env` sets the subnet used by
@@ -357,17 +365,19 @@ last-known address table is retained.
 snapshot. This is less reliable for judging which addresses are free,
 because offline DHCP reservations will not be included.
 
-### Automatic scans on ThinkPad (after approval and merge)
+### Automatic and manual scans on Lenovo or ThinkPad (after setup)
 
-First install and configure `lanscan` **on the ThinkPad host**, not inside
-the Homelab Control container. If using OPNsense correlation, securely create
-the host user's `~/.config/lanscan/config.toml` on ThinkPad as above.
+Install and configure `lanscan` **on the Linux host**, not inside
+Homelab Control's Docker container. This works on Lenovo while testing and
+on ThinkPad after approval and merge. If using OPNsense correlation,
+securely create the host user's `~/.config/lanscan/config.toml` on each
+host as above.
 
 `lanscan` internally runs `sudo arp-scan 192.168.1.0/24`. A
 noninteractive **user** timer therefore needs narrowly scoped sudo permission
 for that exact command. Do **not** enable blanket passwordless sudo or run
 the full web application as root. Check the installed path first with
-`command -v arp-scan` (often `/usr/bin/arp-scan`). Then on ThinkPad:
+`command -v arp-scan` (often `/usr/bin/arp-scan`). Then on the Linux host:
 
 ```bash
 sudo visudo -f /etc/sudoers.d/homelab-lanscan
@@ -384,13 +394,14 @@ This permits only that one ARP scan command. Test it with
 If the installation uses a different sudo rule or scanner binary, adjust
 accordingly; the exporter always invokes the existing `lanscan` CLI.
 
-Manually verify the first scan **on ThinkPad**:
+Manually verify the first scan **on the Linux host**:
 
 ```bash
 cd ~/Development/homelab-control
 bash scripts/update-lanscan.sh
+# ThinkPad backend uses port 3002; use port 3001 on Lenovo instead.
 curl -fsS http://127.0.0.1:3002/api/network/lan |
-  jq '{state, network, scannedAt, summary}'
+  jq '{state, network, scannedAt, summary, scan}'
 ```
 
 When the manual test works, enable the included **user** timer:
@@ -404,7 +415,31 @@ systemctl --user list-timers homelab-lanscan.timer
 journalctl --user -u homelab-lanscan.service -n 40 --no-pager
 ```
 
-The timer refreshes the snapshot every 15 minutes. If you want it to
+The timer checks for a **Scan now** request every minute. If there is no
+manual request, it refreshes the snapshot approximately every 15 minutes.
+The host service runs as your normal user; sudo is restricted to the exact
+ARP scan binary and subnet. **Do not copy any root credentials into Docker.**
+
+Verify that the worker is active and the scan button is available:
+
+```bash
+curl -fsS http://127.0.0.1:3002/api/network/lan | jq '.scan'
+# On Lenovo use http://127.0.0.1:3001 instead.
+# Click NETWORK → LAN → Scan now and watch state queued → running → completed.
+journalctl --user -u homelab-lanscan.service -n 40 --no-pager
+```
+
+If you already installed an older version of these systemd units, copy
+both units again and run `systemctl --user daemon-reload` and
+`systemctl --user restart homelab-lanscan.timer`.
+
+**API responses:** `POST /api/network/lan/scan` returns HTTP 202 when queued,
+409 for an active scan, 429 if a manual scan was requested less than 90
+seconds ago, or 503 if the host worker is unavailable. Cross-site browser
+POSTs are rejected; the application still has **no user authentication**, so
+LAN and API access must remain restricted to trusted devices.
+
+If you want it to
 continue when `unilsson` is logged out, enable systemd lingering for that
 user (`sudo loginctl enable-linger unilsson`). The included service
 assumes the repo is at `~/Development/homelab-control`. If you intentionally
