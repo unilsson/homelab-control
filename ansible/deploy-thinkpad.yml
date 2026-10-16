@@ -5,7 +5,7 @@
 # Updates the EXISTING ThinkPad installation from the approved main branch.
 # It does not change .env or SQLite data.
 - name: Deploy Homelab Control on ThinkPad
-  hosts: thinkpad
+  hosts: homelab
   gather_facts: false
   become: false
 
