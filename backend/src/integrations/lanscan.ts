@@ -1,4 +1,6 @@
 import { readFile, stat } from 'node:fs/promises';
+import { dirname } from 'node:path';
+import { getLanScanInfo, type LanScanInfo } from './lanscan-scan.js';
 
 export type LanStatus = 'used' | 'free' | 'leased' | 'reserved' | 'conflict';
 export type LanDevice = { mac: string; vendor: string };
@@ -17,7 +19,7 @@ export type LanSummary = {
 export type LanInventory = {
   network: string; state: 'online' | 'stale' | 'missing' | 'error';
   scannedAt: string | null; summary: LanSummary | null;
-  results: LanAddress[]; message?: string;
+  results: LanAddress[]; scan: LanScanInfo; message?: string;
 };
 
 const validStatuses = new Set<LanStatus>(['used', 'free', 'leased', 'reserved', 'conflict']);
@@ -124,8 +126,9 @@ export async function readLanInventory(
   filePath = process.env.LANSCAN_SNAPSHOT_FILE?.trim() || '/app/data/lanscan.json',
   network = process.env.LANSCAN_NETWORK?.trim() || defaultNetwork
 ): Promise<LanInventory> {
+  const scan = await getLanScanInfo(dirname(filePath));
   const empty = (state: 'missing' | 'error', message: string): LanInventory =>
-    ({ network, state, scannedAt: null, summary: null, results: [], message });
+    ({ network, state, scannedAt: null, summary: null, results: [], scan, message });
   try {
     const file = await stat(filePath);
     if (!file.isFile() || file.size > maxSnapshotBytes || file.size === 0) {
@@ -135,7 +138,7 @@ export async function readLanInventory(
     const parsed = parseLanSnapshot(JSON.parse(source) as unknown, network);
     const stale = Date.now() - file.mtimeMs > staleAfterMs;
     return {
-      ...parsed, state: stale ? 'stale' : 'online', scannedAt: file.mtime.toISOString(),
+      ...parsed, scan, state: stale ? 'stale' : 'online', scannedAt: file.mtime.toISOString(),
       ...(stale ? { message: 'LAN scan is older than 30 minutes; addresses may have changed.' } : {})
     };
   } catch (error) {
