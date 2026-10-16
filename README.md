@@ -294,3 +294,199 @@ application code but does not copy your private instance configuration. When
 ready for production, configure it separately on the ThinkPad.
 
 The application itself still has no login and must remain on a trusted LAN.
+
+## Sprint 3A — NETWORK → LAN (direct container scanning)
+
+The **NETWORK → LAN** page shows the entire `192.168.1.0/24` address
+allocation (**254** usable IPv4 addresses) with used/free/leased/reserved/
+conflict status, search and status filters, hostname, MAC and vendor/description.
+
+**Scan now runs lanscan directly in Homelab Control's backend container.**
+No host-side installation, queue, Python worker or systemd timer is needed.
+The backend also scans automatically on startup and about every **15 minutes**.
+
+### How Scan now works
+
+1. The browser sends `POST /api/network/lan/scan` to the backend.
+2. The Node backend starts a *fixed* `lanscan 192.168.1.0/24 --all --json`
+   command (plus `--opnsense` if configured). It does **not** accept a
+   command or subnet from the browser.
+3. While the scan runs, the UI displays **Scanning…**, polls every three
+   seconds and keeps the previous snapshot visible.
+4. The versioned JSON result is strictly validated for **all 254 addresses**
+   and atomically stored in `./data/lanscan.json`. A failed or partial scan
+   cannot overwrite the previous complete snapshot.
+5. The backend returns a completed/failed state and the latest address table.
+
+The API does not block while the scan is in progress. Repeated requests are
+limited to once per 90 seconds; simultaneous scans are rejected with HTTP 409.
+
+### Docker setup (Lenovo and ThinkPad)
+
+```bash
+cd ~/Development/homelab-control
+git switch sprint-3a-lanscan-lan-inventory
+git pull --ff-only
+docker compose up -d --build
+```
+
+Open **http://localhost:8080 → NETWORK → LAN** and click **Scan now**.
+
+The Docker image automatically installs a pinned release of the existing
+[`unilsson/lanscan`](https://github.com/unilsson/lanscan) Python CLI and
+`arp-scan`. You do **not** need to install them on the Linux host.
+
+**Important Docker networking change:** The backend uses
+`network_mode: host` on Linux, because ARP broadcasts are not delivered to
+your physical LAN from an ordinary Docker bridge. The backend still runs as
+the non-root `node` user. Only `CAP_NET_RAW` is granted, and only the
+`arp-scan` binary receives that file capability. The tiny in-container
+`sudo` compatibility shim executes *only* the configured `arp-scan` subnet;
+it does not raise privileges or provide a root shell.
+
+The frontend remains on its usual bridged Docker network. Its Nginx template
+proxies API requests through `host.docker.internal` to the configured
+`BACKEND_PORT` on the host. This requires **Linux Docker Engine** with
+`host-gateway` support.
+
+**Ports are unchanged:**
+- Lenovo: `BACKEND_PORT=3001`, frontend normally `8080`.
+- ThinkPad: `BACKEND_PORT=3002`, frontend normally `8080`.
+
+Unlike Docker port publishing, host networking makes the backend bind to
+the actual `BACKEND_PORT`. A different local process must not already be
+listening there. Keep the backend and frontend reachable **only on your
+trusted LAN**; Homelab Control does not yet have a user login. The scanner
+does not permit clients to choose additional target networks.
+
+For a quick check on Lenovo:
+
+```bash
+curl -fsS http://localhost:3001/api/network/lan |
+  jq '{network, state, scannedAt, summary, scan}'
+```
+
+On ThinkPad, use port `3002`.
+
+### OPNsense DHCP integration through Infisical
+
+For complete inventory coverage, Homelab Control combines two read-only
+sources:
+
+- **lanscan** runs ARP and reverse-DNS discovery in Docker; this requires
+  no OPNsense credentials.
+- **Homelab Control backend** uses the existing Infisical Machine Identity
+  to retrieve **two secrets in memory**. It then calls the **read-only
+  OPNsense ISC DHCPv4 lease API** over verified HTTPS, and correlates
+  dynamic leases and static DHCP reservations with the ARP results.
+
+**The OPNsense API key and secret never appear in `.env`, Docker process
+arguments, the Python CLI, local config files, SQLite, or the browser.**
+Existing Infisical settings used for the Proxmox integration are reused;
+you do not need a second Infisical client.
+
+#### 1. Create secrets in Infisical
+
+In the same Infisical project, environment (`INFISICAL_ENV`) and path
+(`INFISICAL_SECRET_PATH`) that Homelab Control already uses, add:
+
+| Infisical secret name | Value |
+| --- | --- |
+| `OPNSENSE_API_KEY` | Your read-only OPNsense API key |
+| `OPNSENSE_API_SECRET` | The corresponding OPNsense API secret |
+
+The existing Machine Identity must have **read permission** for both
+secrets. OPNsense's API user needs only the ISC DHCPv4 lease read
+permission. **Do not paste these secret values into a GitHub file, a chat
+message or Docker environment variables.**
+
+#### 2. Configure connection metadata only
+
+In each machine's **local** `.env`:
+
+```dotenv
+LANSCAN_NETWORK=192.168.1.0/24
+LANSCAN_WITH_OPNSENSE=true
+LANSCAN_OPNSENSE_URL=https://opnsense.ulnihnw.net
+LANSCAN_OPNSENSE_API_KEY_REF=OPNSENSE_API_KEY
+LANSCAN_OPNSENSE_API_SECRET_REF=OPNSENSE_API_SECRET
+# Optional: public CA if OPNsense's HTTPS certificate uses a private CA
+# LANSCAN_OPNSENSE_CA_PATH=/app/certs/opnsense-ca.pem
+```
+
+Use the real HTTPS hostname for your OPNsense firewall. The certificate
+**must match that hostname**. Normal CA validation stays enabled.
+If OPNsense uses its own CA, install **only its public CA certificate**
+as `./certs/opnsense-ca.pem` and set `LANSCAN_OPNSENSE_CA_PATH`
+as shown. This public certificate is mounted via the existing read-only
+`./certs:/app/certs` volume. We do **not** allow `verify_tls=false` or
+`NODE_TLS_REJECT_UNAUTHORIZED=0`.
+
+Then restart the backend to load the updated environment:
+
+```bash
+docker compose up -d --force-recreate backend
+```
+
+#### 3. Test safely
+
+Open **NETWORK → LAN → Scan now**, then check:
+
+```bash
+curl -fsS http://localhost:3001/api/integrations/opnsense | jq
+curl -fsS http://localhost:3001/api/network/lan |
+  jq '{state, scannedAt, summary, scan}'
+```
+
+Use port **3002** on ThinkPad. The OPNsense connection also appears under
+**SETTINGS → Integrations**. Only connection status and last-check time
+are exposed.
+
+Addresses with an active OPNsense dynamic lease but no ARP response are
+`LEASED`; offline static DHCP mappings are `RESERVED`. A device
+answering ARP is `USED` or `CONFLICT` regardless of lease type.
+
+**Fail-closed behavior:** When OPNsense mode is enabled and either
+Infisical secret retrieval, HTTPS/TLS validation or the DHCP API fails,
+the scan reports **Failed** and preserves the previous good inventory.
+We deliberately do not replace it with an ARP-only snapshot that could
+incorrectly mark reserved addresses `FREE`.
+
+During troubleshooting, `LANSCAN_WITH_OPNSENSE=false` is an optional
+temporary ARP-only mode, but free-address classification is less reliable
+without OPNsense reservations. The Infisical client already caches
+successfully retrieved secrets for 5 minutes and has a bounded 1-hour
+in-memory stale fallback during brief Infisical outages.
+
+### Troubleshooting
+
+```bash
+docker compose ps
+docker compose logs --tail=80 backend
+curl -s http://localhost:3001/api/network/lan | jq '.scan'
+```
+
+If scans fail, check that the host has access to the intended LAN and
+supports Docker host networking. If enabling OPNsense makes scans fail,
+check the Infisical secret references and Machine Identity read permissions,
+OPNsense API user privileges, TLS CA/hostname and HTTPS reachability.
+You can temporarily set `LANSCAN_WITH_OPNSENSE=false` for an ARP-only test.
+
+If you previously configured the *unmerged, older* systemd worker approach
+on Lenovo, it is no longer needed. You may disable and remove its user
+timer/service:
+
+```bash
+systemctl --user disable --now homelab-lanscan.timer 2>/dev/null || true
+rm -f ~/.config/systemd/user/homelab-lanscan.service \
+      ~/.config/systemd/user/homelab-lanscan.timer
+systemctl --user daemon-reload
+```
+
+A previously added `/etc/sudoers.d/homelab-lanscan` rule is also unnecessary
+and should be reviewed/removed with administrator privileges.
+
+**Interpretation:** `FREE` means no ARP response and, when OPNsense is
+enabled, no active DHCP lease or static reservation. Sleeping/static hosts
+can still escape discovery. Never automatically allocate IP addresses based
+only on this scan.

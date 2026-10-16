@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import { Activity, Boxes, LayoutDashboard, Radar, Settings2, Server, ShieldCheck, TriangleAlert, Clock3, RefreshCw, Cpu, Database, HardDrive, Layers3, ChevronDown, ChevronUp } from 'lucide-react';
+import { Activity, Boxes, LayoutDashboard, Radar, Settings2, Server, ShieldCheck, TriangleAlert, Clock3, RefreshCw, Cpu, Database, HardDrive, Layers3, ChevronDown, ChevronUp, Network } from 'lucide-react';
+import LanPage from './LanPage.js';
 
 type System = {
   id: number; name: string; type: string; status: string; host: string | null;
@@ -29,12 +30,17 @@ type SecretProviderStatus = {
   state: 'disabled' | 'idle' | 'online' | 'degraded' | 'error';
   lastCheckedAt: string | null; message?: string;
 };
-type Page = 'Dashboard' | 'Systems' | 'Services' | 'Actions' | 'Proxmox' | 'Events' | 'Discoveries' | 'Analysis' | 'Integrations';
+type OpnsenseStatus = {
+  configured: boolean; state: 'disabled' | 'idle' | 'online' | 'error';
+  lastCheckedAt: string | null; message?: string;
+};
+type Page = 'Dashboard' | 'Systems' | 'Services' | 'Actions' | 'Proxmox' | 'LAN' | 'Events' | 'Discoveries' | 'Analysis' | 'Integrations';
 
 const sections: { label: string; pages: Page[] }[] = [
   { label: 'OVERVIEW', pages: ['Dashboard'] },
   { label: 'COMMANDER', pages: ['Systems', 'Services', 'Actions'] },
   { label: 'VIRTUALIZATION', pages: ['Proxmox'] },
+  { label: 'NETWORK', pages: ['LAN'] },
   { label: 'DETECTIVE', pages: ['Events', 'Discoveries', 'Analysis'] },
   { label: 'SETTINGS', pages: ['Integrations'] }
 ];
@@ -45,6 +51,7 @@ function iconFor(page: Page) {
   if (page === 'Dashboard') return <LayoutDashboard size={17} />;
   if (page === 'Systems') return <Server size={17} />;
   if (page === 'Proxmox') return <Layers3 size={17} />;
+  if (page === 'LAN') return <Network size={17} />;
   if (page === 'Events') return <Clock3 size={17} />;
   if (page === 'Integrations') return <Settings2 size={17} />;
   if (page === 'Discoveries' || page === 'Analysis') return <Radar size={17} />;
@@ -74,6 +81,7 @@ export default function App() {
   const [events, setEvents] = useState<Event[]>([]);
   const [proxmox, setProxmox] = useState<ProxmoxInventory>(defaultInventory);
   const [infisical, setInfisical] = useState<SecretProviderStatus>({ provider: 'infisical', configured: false, state: 'disabled', lastCheckedAt: null });
+  const [opnsense, setOpnsense] = useState<OpnsenseStatus>({ configured: false, state: 'disabled', lastCheckedAt: null });
   const [loading, setLoading] = useState(true);
   const [apiError, setApiError] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
@@ -83,20 +91,22 @@ export default function App() {
     const controller = new AbortController();
     const load = async () => {
       try {
-        const [healthResponse, systemsResponse, eventsResponse, proxmoxResponse, infisicalResponse] = await Promise.all([
+        const [healthResponse, systemsResponse, eventsResponse, proxmoxResponse, infisicalResponse, opnsenseResponse] = await Promise.all([
           fetch('/api/health', { signal: controller.signal }),
           fetch('/api/systems', { signal: controller.signal }),
           fetch('/api/events', { signal: controller.signal }),
           fetch('/api/integrations/proxmox', { signal: controller.signal }),
-          fetch('/api/integrations/infisical', { signal: controller.signal })
+          fetch('/api/integrations/infisical', { signal: controller.signal }),
+          fetch('/api/integrations/opnsense', { signal: controller.signal })
         ]);
-        if (![healthResponse, systemsResponse, eventsResponse, proxmoxResponse, infisicalResponse].every(r => r.ok)) throw new Error('API unavailable');
-        const [health, newSystems, newEvents, newProxmox, newInfisical] = await Promise.all([
+        if (![healthResponse, systemsResponse, eventsResponse, proxmoxResponse, infisicalResponse, opnsenseResponse].every(r => r.ok)) throw new Error('API unavailable');
+        const [health, newSystems, newEvents, newProxmox, newInfisical, newOpnsense] = await Promise.all([
           healthResponse.json() as Promise<{ status: string }>,
           systemsResponse.json() as Promise<System[]>,
           eventsResponse.json() as Promise<Event[]>,
           proxmoxResponse.json() as Promise<ProxmoxInventory>,
-          infisicalResponse.json() as Promise<SecretProviderStatus>
+          infisicalResponse.json() as Promise<SecretProviderStatus>,
+          opnsenseResponse.json() as Promise<OpnsenseStatus>
         ]);
         if (controller.signal.aborted) return;
         setOnline(health.status === 'ok');
@@ -104,6 +114,7 @@ export default function App() {
         setEvents(newEvents);
         setProxmox(newProxmox);
         setInfisical(newInfisical);
+        setOpnsense(newOpnsense);
         setApiError(false);
       } catch {
         if (!controller.signal.aborted) { setOnline(false); setApiError(true); }
@@ -204,7 +215,7 @@ export default function App() {
     </aside>
     <main className="main">
       <header className="topbar"><span>Infrastructure / <strong>{page}</strong></span><div className="header-actions"><button className="refresh" type="button" onClick={() => { setLoading(true); setRefreshKey(k => k + 1); }} aria-label="Refresh data" title="Refresh data"><RefreshCw size={16}/></button><span className={online ? 'connection online' : 'connection offline'}><span className="dot"/>{online ? 'API ONLINE' : 'API OFFLINE'}</span></div></header>
-      <div className="content"><div className="eyebrow">HOMELAB CONTROL / {page.toUpperCase()}</div><h1>{page}</h1><p className="subhead">{page === 'Dashboard' ? 'Your infrastructure, all in one place.' : page === 'Proxmox' ? 'Your Proxmox servers and virtual workloads.' : 'Infrastructure control and observability.'}</p>
+      <div className="content"><div className="eyebrow">HOMELAB CONTROL / {page.toUpperCase()}</div><h1>{page}</h1><p className="subhead">{page === 'Dashboard' ? 'Your infrastructure, all in one place.' : page === 'Proxmox' ? 'Your Proxmox servers and virtual workloads.' : page === 'LAN' ? 'All local IPv4 addresses, used and apparently free.' : 'Infrastructure control and observability.'}</p>
       {apiError && <div className="notice"><TriangleAlert size={17}/> Unable to reach Homelab Control API. Data may be stale.</div>}
       {page === 'Dashboard' ? <>
         <div className="cards">
@@ -229,6 +240,7 @@ export default function App() {
         <section className="panel"><h2>Recent events</h2>{events.length === 0 ? <div className="empty">No events recorded yet.</div> : events.slice(0, 5).map(e => <div className="row" key={e.id}><strong>{e.message}</strong><span>{e.severity} · {e.created_at}</span></div>)}</section>
       </> : page === 'Systems' ? <section className="panel"><h2>Discovered systems</h2>{systemRows}</section> :
       page === 'Proxmox' ? proxmoxPanel :
+      page === 'LAN' ? <LanPage refreshKey={refreshKey} /> :
       page === 'Integrations' ? <> <section className="panel">
         <div className="panel-title"><h2>Proxmox VE connections</h2><span className={statusClass(proxmox.state)}>{proxmox.state}</span></div>
         <p className="panel-copy">Manage multiple independent Proxmox installations through your local <code>config/proxmox-instances.json</code> file. Each server has its own read-only API token and optional CA certificate.</p>
@@ -244,10 +256,20 @@ export default function App() {
       </section>
       <section className="panel">
         <div className="panel-title">
+          <div><h2>OPNsense DHCP</h2><p>LAN inventory · Infisical Machine Identity</p></div>
+          <span className={statusClass(opnsense.state)}>{opnsense.state}</span>
+        </div>
+        <p className="panel-copy">Read-only DHCP lease and static reservation data are combined with lanscan ARP results. OPNsense API credentials are retrieved from Infisical in backend memory.</p>
+        <p className="panel-copy muted">Last checked: {opnsense.lastCheckedAt ? new Date(opnsense.lastCheckedAt).toLocaleString() : 'never'} · API credentials are never sent to the browser.</p>
+        {opnsense.message && <div className="notice"><TriangleAlert size={17}/><span>{opnsense.message}</span></div>}
+        {!opnsense.configured && <div className="empty">Set LANSCAN_WITH_OPNSENSE=true, LANSCAN_OPNSENSE_URL and the two Infisical secret references to enable DHCP correlation.</div>}
+      </section>
+      <section className="panel">
+        <div className="panel-title">
           <div><h2>Infisical secrets</h2><p>Self-hosted Machine Identity · Universal Auth</p></div>
           <span className={statusClass(infisical.state)}>{infisical.state}</span>
         </div>
-        <p className="panel-copy">Proxmox API tokens are retrieved by secret reference and kept in backend memory. Credentials are never returned to the browser or stored in SQLite.</p>
+        <p className="panel-copy">Proxmox API tokens and OPNsense API credentials are retrieved by secret reference and kept in backend memory. Credentials are never returned to the browser or stored in SQLite.</p>
         <p className="panel-copy muted">Last checked: {infisical.lastCheckedAt ? new Date(infisical.lastCheckedAt).toLocaleString() : 'never'}</p>
         {infisical.message && <div className="notice"><TriangleAlert size={17}/>{infisical.message}</div>}
         {!infisical.configured && <div className="empty">Infisical is not configured. Set Machine Identity credentials in your local deployment environment.</div>}
