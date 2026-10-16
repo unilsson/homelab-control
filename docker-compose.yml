@@ -18,6 +18,7 @@ services:
       INFISICAL_CLIENT_ID: ${INFISICAL_CLIENT_ID:-}
       INFISICAL_CLIENT_SECRET: ${INFISICAL_CLIENT_SECRET:-}
       INFISICAL_CLIENT_SECRET_FILE: ${INFISICAL_CLIENT_SECRET_FILE:-}
+      NODE_EXTRA_CA_CERTS: ${INFISICAL_CA_PATH:-}
     volumes:
       - ./data:/app/data
       - ./certs:/app/certs:ro
