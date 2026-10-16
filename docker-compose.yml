@@ -6,6 +6,7 @@ services:
       NODE_ENV: production
       PORT: 3001
       DATABASE_PATH: /app/data/homelab.sqlite
+      PROXMOX_INSTANCES_FILE: ${PROXMOX_INSTANCES_FILE:-}
       PROXMOX_URL: ${PROXMOX_URL:-}
       PROXMOX_TOKEN_ID: ${PROXMOX_TOKEN_ID:-}
       PROXMOX_TOKEN_SECRET: ${PROXMOX_TOKEN_SECRET:-}
@@ -13,6 +14,7 @@ services:
     volumes:
       - ./data:/app/data
       - ./certs:/app/certs:ro
+      - ./config:/app/config:ro
     ports:
       - "${BACKEND_PORT:-3001}:3001"
     healthcheck:
