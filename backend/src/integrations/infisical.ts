@@ -21,9 +21,8 @@ export type SecretProviderStatus = {
 
 const cache = new Map<string, CachedValue>();
 const pending = new Map<string, Promise<string>>();
-let state: PublicState = 'disabled';
+const outcomes = new Map<string, 'online' | 'degraded' | 'error'>();
 let lastCheckedAt: string | null = null;
-let message: string | undefined;
 
 function bootstrapSecret(): string {
   const file = process.env.INFISICAL_CLIENT_SECRET_FILE?.trim();
@@ -77,12 +76,19 @@ export function getInfisicalStatus(): SecretProviderStatus {
     (process.env.INFISICAL_CLIENT_SECRET_FILE?.trim() ||
       process.env.INFISICAL_CLIENT_SECRET?.trim())
   );
+  const states = [...outcomes.values()];
+  const status: PublicState = !configured ? 'disabled'
+    : states.length === 0 ? 'idle'
+    : states.every(s => s === 'error') ? 'error'
+    : states.some(s => s !== 'online') ? 'degraded' : 'online';
   return {
     provider: 'infisical',
     configured,
-    state: !configured ? 'disabled' : state === 'disabled' ? 'idle' : state,
+    state: status,
     lastCheckedAt,
-    ...(message ? { message } : {})
+    ...(status === 'error' ? { message: 'Required secrets are unavailable from Infisical.' }
+      : status === 'degraded' ? { message: 'Some secrets are unavailable or using recent cached values.' }
+      : {})
   };
 }
 
@@ -133,20 +139,17 @@ export function getInfisicalSecret(secretName: string): Promise<string> {
         throw new Error('Empty secret');
       }
       cache.set(cacheKey, { value, fetchedAt: Date.now() });
-      state = 'online';
-      message = undefined;
+      outcomes.set(cacheKey, 'online');
       lastCheckedAt = new Date().toISOString();
       return value;
     } catch {
       lastCheckedAt = new Date().toISOString();
       const lastGood = cache.get(cacheKey);
       if (lastGood && Date.now() - lastGood.fetchedAt < maxStaleMs) {
-        state = 'degraded';
-        message = 'Infisical is unavailable; using a recent in-memory value.';
+        outcomes.set(cacheKey, 'degraded');
         return lastGood.value;
       }
-      state = 'error';
-      message = 'Cannot retrieve required secrets from Infisical.';
+      outcomes.set(cacheKey, 'error');
       throw new Error('Required secret unavailable from Infisical.');
     }
   })().finally(() => { pending.delete(cacheKey); });
