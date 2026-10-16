@@ -16,9 +16,8 @@ A unified control and investigation dashboard for a self-hosted homelab, combini
 Requires Docker Engine and Docker Compose plugin.
 
 ```bash
-git clone https://github.com/unilsson/homelab-control.git
+git clone git@github.com:unilsson/homelab-control.git
 cd homelab-control
-git switch sprint-1-foundation
 cp .env.example .env
 docker compose up -d --build
 docker compose ps
@@ -57,4 +56,24 @@ Start the backend with `cd backend && npm install && npm run dev` and the fronte
 
 ## Workflow
 
-Sprint branch: `sprint-1-foundation`. Test the application before merging into `main`.
+Production on ThinkPad tracks `main`; test feature and sprint branches on the development laptop before merging.
+
+## Deploy remotely to ThinkPad with Ansible
+
+Run the playbook **on your development laptop**, using SSH to reach the Ubuntu Server on ThinkPad.
+
+Requirements:
+- Ansible installed on your development laptop.
+- SSH connectivity as `unilsson@thinkpad` (SSH alias or working hostname).
+- On ThinkPad, `unilsson` must have GitHub SSH access and permission to use Docker without sudo.
+- An existing ThinkPad installation at `/home/unilsson/Development/homelab-control` with a local `.env` file.
+
+```bash
+sudo apt install ansible
+ansible -i ansible/inventory.ini thinkpad -m ping
+ansible-playbook -i ansible/inventory.ini ansible/deploy-thinkpad.yml
+```
+
+The playbook checks the local `.env`, updates the remote working tree to `main`, runs `docker compose up -d --build`, and verifies the API on port **3002** and dashboard on port **8080**. It does **not** copy or overwrite `.env` or `data/`. The ports can be overridden with extra vars, for example `-e homelab_api_port=3003`.
+
+If `thinkpad` is not resolvable from the laptop, edit `ansible/inventory.ini` and set `ansible_host` to ThinkPad's reachable IP address.
