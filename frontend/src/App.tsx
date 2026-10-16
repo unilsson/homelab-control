@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import { Activity, Boxes, LayoutDashboard, Radar, Settings2, Server, ShieldCheck, TriangleAlert, Clock3, RefreshCw, Cpu, Database, HardDrive, Layers3, ChevronDown, ChevronUp } from 'lucide-react';
+import { Activity, Boxes, LayoutDashboard, Radar, Settings2, Server, ShieldCheck, TriangleAlert, Clock3, RefreshCw, Cpu, Database, HardDrive, Layers3, ChevronDown, ChevronUp, Network } from 'lucide-react';
+import LanPage from './LanPage.js';
 
 type System = {
   id: number; name: string; type: string; status: string; host: string | null;
@@ -29,12 +30,13 @@ type SecretProviderStatus = {
   state: 'disabled' | 'idle' | 'online' | 'degraded' | 'error';
   lastCheckedAt: string | null; message?: string;
 };
-type Page = 'Dashboard' | 'Systems' | 'Services' | 'Actions' | 'Proxmox' | 'Events' | 'Discoveries' | 'Analysis' | 'Integrations';
+type Page = 'Dashboard' | 'Systems' | 'Services' | 'Actions' | 'Proxmox' | 'LAN' | 'Events' | 'Discoveries' | 'Analysis' | 'Integrations';
 
 const sections: { label: string; pages: Page[] }[] = [
   { label: 'OVERVIEW', pages: ['Dashboard'] },
   { label: 'COMMANDER', pages: ['Systems', 'Services', 'Actions'] },
   { label: 'VIRTUALIZATION', pages: ['Proxmox'] },
+  { label: 'NETWORK', pages: ['LAN'] },
   { label: 'DETECTIVE', pages: ['Events', 'Discoveries', 'Analysis'] },
   { label: 'SETTINGS', pages: ['Integrations'] }
 ];
@@ -45,6 +47,7 @@ function iconFor(page: Page) {
   if (page === 'Dashboard') return <LayoutDashboard size={17} />;
   if (page === 'Systems') return <Server size={17} />;
   if (page === 'Proxmox') return <Layers3 size={17} />;
+  if (page === 'LAN') return <Network size={17} />;
   if (page === 'Events') return <Clock3 size={17} />;
   if (page === 'Integrations') return <Settings2 size={17} />;
   if (page === 'Discoveries' || page === 'Analysis') return <Radar size={17} />;
@@ -204,7 +207,7 @@ export default function App() {
     </aside>
     <main className="main">
       <header className="topbar"><span>Infrastructure / <strong>{page}</strong></span><div className="header-actions"><button className="refresh" type="button" onClick={() => { setLoading(true); setRefreshKey(k => k + 1); }} aria-label="Refresh data" title="Refresh data"><RefreshCw size={16}/></button><span className={online ? 'connection online' : 'connection offline'}><span className="dot"/>{online ? 'API ONLINE' : 'API OFFLINE'}</span></div></header>
-      <div className="content"><div className="eyebrow">HOMELAB CONTROL / {page.toUpperCase()}</div><h1>{page}</h1><p className="subhead">{page === 'Dashboard' ? 'Your infrastructure, all in one place.' : page === 'Proxmox' ? 'Your Proxmox servers and virtual workloads.' : 'Infrastructure control and observability.'}</p>
+      <div className="content"><div className="eyebrow">HOMELAB CONTROL / {page.toUpperCase()}</div><h1>{page}</h1><p className="subhead">{page === 'Dashboard' ? 'Your infrastructure, all in one place.' : page === 'Proxmox' ? 'Your Proxmox servers and virtual workloads.' : page === 'LAN' ? 'All local IPv4 addresses, used and apparently free.' : 'Infrastructure control and observability.'}</p>
       {apiError && <div className="notice"><TriangleAlert size={17}/> Unable to reach Homelab Control API. Data may be stale.</div>}
       {page === 'Dashboard' ? <>
         <div className="cards">
@@ -229,6 +232,7 @@ export default function App() {
         <section className="panel"><h2>Recent events</h2>{events.length === 0 ? <div className="empty">No events recorded yet.</div> : events.slice(0, 5).map(e => <div className="row" key={e.id}><strong>{e.message}</strong><span>{e.severity} · {e.created_at}</span></div>)}</section>
       </> : page === 'Systems' ? <section className="panel"><h2>Discovered systems</h2>{systemRows}</section> :
       page === 'Proxmox' ? proxmoxPanel :
+      page === 'LAN' ? <LanPage refreshKey={refreshKey} /> :
       page === 'Integrations' ? <> <section className="panel">
         <div className="panel-title"><h2>Proxmox VE connections</h2><span className={statusClass(proxmox.state)}>{proxmox.state}</span></div>
         <p className="panel-copy">Manage multiple independent Proxmox installations through your local <code>config/proxmox-instances.json</code> file. Each server has its own read-only API token and optional CA certificate.</p>
