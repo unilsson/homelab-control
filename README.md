@@ -294,3 +294,132 @@ application code but does not copy your private instance configuration. When
 ready for production, configure it separately on the ThinkPad.
 
 The application itself still has no login and must remain on a trusted LAN.
+
+## Sprint 3A — NETWORK → LAN (lanscan)
+
+The **NETWORK → LAN** page shows the entire local IPv4 allocation (normally all
+**254** host addresses of `192.168.1.0/24`) in numeric IP order. It includes a
+searchable table and status filters for `USED`, `FREE`, `LEASED`, `RESERVED`
+and `CONFLICT`. Each row shows its IP, hostname, MAC, vendor or DHCP
+description when available. Summary counters show total/occupied/free addresses.
+
+**Data source:** the separate open-source
+[`unilsson/lanscan`](https://github.com/unilsson/lanscan) CLI, not an
+additional scanner built into Homelab Control. Its versioned
+`lanscan 192.168.1.0/24 --all --opnsense --json` output is saved to the host's
+`data/lanscan.json`. Docker already bind-mounts `./data:/app/data`; the
+backend only **reads** this JSON at `GET /api/network/lan`.
+The JSON contains no OPNsense API credentials. **No Docker host networking,
+NET_RAW, sudo, or OPNsense secrets are needed inside the container.**
+
+`LANSCAN_NETWORK=192.168.1.0/24` in the host's `.env` sets the subnet used by
+the backend validator and Docker. The same subnet must be used by the host
+exporter. The default snapshot path inside Docker is
+`/app/data/lanscan.json`.
+
+### Initial local test (Lenovo)
+
+Install `lanscan` and `arp-scan` on the host if needed:
+
+```bash
+sudo apt install python3 pipx arp-scan
+pipx install git+https://github.com/unilsson/lanscan.git
+```
+
+If `lanscan` is already installed, use the existing installation.
+The host must actually be connected to `192.168.1.0/24` and must be able
+to send ARP requests on that network.
+
+For the complete `LEASED`/`RESERVED` information, configure the host user's
+`~/.config/lanscan/config.toml` with **read-only OPNsense API credentials**,
+as documented in the lanscan repository. This file is not copied into Docker,
+is not committed, and should have mode `600`.
+
+```bash
+cd ~/Development/homelab-control
+git switch sprint-3a-lanscan-lan-inventory
+# Interactive sudo may prompt for a password; run as your normal user.
+bash scripts/update-lanscan.sh
+docker compose up -d --build
+curl -fsS http://localhost:3001/api/network/lan |
+  jq '{network, state, scannedAt, summary}'
+```
+
+Open **http://localhost:8080**, then navigate to **NETWORK → LAN**. A
+successful `/24` snapshot has `summary.total == 254`; for a fresh scan,
+`state == "online"`. Page data reloads every 30 seconds. The host scan
+itself is separate and only updates when you run the script (or enable the
+timer below). A snapshot older than 30 minutes appears as `stale`, but its
+last-known address table is retained.
+
+**No OPNsense credentials configured yet?** Run
+`LANSCAN_WITH_OPNSENSE=0 bash scripts/update-lanscan.sh` for an ARP-only
+snapshot. This is less reliable for judging which addresses are free,
+because offline DHCP reservations will not be included.
+
+### Automatic scans on ThinkPad (after approval and merge)
+
+First install and configure `lanscan` **on the ThinkPad host**, not inside
+the Homelab Control container. If using OPNsense correlation, securely create
+the host user's `~/.config/lanscan/config.toml` on ThinkPad as above.
+
+`lanscan` internally runs `sudo arp-scan 192.168.1.0/24`. A
+noninteractive **user** timer therefore needs narrowly scoped sudo permission
+for that exact command. Do **not** enable blanket passwordless sudo or run
+the full web application as root. Check the installed path first with
+`command -v arp-scan` (often `/usr/bin/arp-scan`). Then on ThinkPad:
+
+```bash
+sudo visudo -f /etc/sudoers.d/homelab-lanscan
+```
+
+Add one line, adapting the binary path if needed:
+
+```text
+unilsson ALL=(root) NOPASSWD: /usr/bin/arp-scan 192.168.1.0/24
+```
+
+This permits only that one ARP scan command. Test it with
+`sudo -n /usr/bin/arp-scan 192.168.1.0/24 >/dev/null`.
+If the installation uses a different sudo rule or scanner binary, adjust
+accordingly; the exporter always invokes the existing `lanscan` CLI.
+
+Manually verify the first scan **on ThinkPad**:
+
+```bash
+cd ~/Development/homelab-control
+bash scripts/update-lanscan.sh
+curl -fsS http://127.0.0.1:3002/api/network/lan |
+  jq '{state, network, scannedAt, summary}'
+```
+
+When the manual test works, enable the included **user** timer:
+
+```bash
+mkdir -p ~/.config/systemd/user
+cp systemd/homelab-lanscan.service systemd/homelab-lanscan.timer ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now homelab-lanscan.timer
+systemctl --user list-timers homelab-lanscan.timer
+journalctl --user -u homelab-lanscan.service -n 40 --no-pager
+```
+
+The timer refreshes the snapshot every 15 minutes. If you want it to
+continue when `unilsson` is logged out, enable systemd lingering for that
+user (`sudo loginctl enable-linger unilsson`). The included service
+assumes the repo is at `~/Development/homelab-control`. If you intentionally
+do not use the OPNsense API, change `LANSCAN_WITH_OPNSENSE=1` to `0` in
+your **local installed copy** of the service before enabling the timer.
+
+**Important safety note:** `FREE` means only that no device answered ARP
+and (with `--opnsense`) OPNsense knows of no active lease or static mapping.
+It does *not* guarantee an address is unused by a sleeping, static-IP or
+otherwise invisible device. Never automatically allocate IPs based solely
+on these scans. Keep the LAN dashboard on your trusted network: the
+web app does not yet have authentication.
+
+The script only replaces the snapshot **after validating** that all expected
+IP addresses are present. On scan failure, the previous snapshot is preserved
+and subsequently flagged stale. The snapshot is Git-ignored. Ansible
+deploys application code only; it does **not** provision `lanscan`,
+the OPNsense credentials, the sudoers entry or the user timer.
