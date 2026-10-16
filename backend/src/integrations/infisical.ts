@@ -95,12 +95,22 @@ export function getInfisicalSecret(secretName: string): Promise<string> {
   if (!/^[A-Za-z][A-Za-z0-9_]{0,127}$/.test(secretName)) {
     return Promise.reject(new Error('Invalid Infisical secret reference.'));
   }
-  const existing = cache.get(secretName);
+  // Scope the cache to an Infisical project/environment/path, not merely a
+  // shared key name. This prevents cross-environment credential reuse.
+  const cacheKey = [
+    process.env.INFISICAL_SITE_URL ?? '',
+    process.env.INFISICAL_PROJECT_ID ?? '',
+    process.env.INFISICAL_ENV ?? 'dev',
+    process.env.INFISICAL_SECRET_PATH ?? '/',
+    process.env.INFISICAL_CLIENT_ID ?? '',
+    secretName
+  ].join('\\u0000');
+  const existing = cache.get(cacheKey);
   if (existing && Date.now() - existing.fetchedAt < refreshMs) {
     return Promise.resolve(existing.value);
   }
 
-  const inflight = pending.get(secretName);
+  const inflight = pending.get(cacheKey);
   if (inflight) return inflight;
 
   const run = (async (): Promise<string> => {
@@ -122,14 +132,14 @@ export function getInfisicalSecret(secretName: string): Promise<string> {
       if (typeof value !== 'string' || !value.length) {
         throw new Error('Empty secret');
       }
-      cache.set(secretName, { value, fetchedAt: Date.now() });
+      cache.set(cacheKey, { value, fetchedAt: Date.now() });
       state = 'online';
       message = undefined;
       lastCheckedAt = new Date().toISOString();
       return value;
     } catch {
       lastCheckedAt = new Date().toISOString();
-      const lastGood = cache.get(secretName);
+      const lastGood = cache.get(cacheKey);
       if (lastGood && Date.now() - lastGood.fetchedAt < maxStaleMs) {
         state = 'degraded';
         message = 'Infisical is unavailable; using a recent in-memory value.';
@@ -139,8 +149,8 @@ export function getInfisicalSecret(secretName: string): Promise<string> {
       message = 'Cannot retrieve required secrets from Infisical.';
       throw new Error('Required secret unavailable from Infisical.');
     }
-  })().finally(() => { pending.delete(secretName); });
+  })().finally(() => { pending.delete(cacheKey); });
 
-  pending.set(secretName, run);
+  pending.set(cacheKey, run);
   return run;
 }
