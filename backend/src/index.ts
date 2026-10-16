@@ -4,7 +4,7 @@ import { db } from './database.js';
 import { getProxmoxInventory } from './integrations/proxmox.js';
 import { getInfisicalStatus } from './integrations/infisical.js';
 import { readLanInventory } from './integrations/lanscan.js';
-import { enqueueLanScan } from './integrations/lanscan-scan.js';
+import { getLanScanInfo, requestLanScan, startLanScanner } from './integrations/lanscan-scan.js';
 
 const app = express();
 app.disable('x-powered-by');
@@ -34,11 +34,11 @@ app.get('/api/integrations/proxmox', async (_req, res, next) => {
 });
 
 app.get('/api/network/lan', async (_req, res, next) => {
-  try { res.json(await readLanInventory()); }
+  try { res.json({ ...await readLanInventory(), scan: getLanScanInfo() }); }
   catch (error) { next(error); }
 });
 
-// Queue only a fixed host-side scan; never execute OS commands in Docker.
+// Execute a fixed, configured lanscan command with concurrency and cooldown limits.
 // No authentication exists yet: reject cross-site browser requests and rate-limit
 // all manual requests. Keep both web and backend ports restricted to trusted LAN.
 app.post('/api/network/lan/scan', async (req, res, next) => {
@@ -62,7 +62,7 @@ app.post('/api/network/lan/scan', async (req, res, next) => {
     }
   }
   try {
-    const result = await enqueueLanScan();
+    const result = requestLanScan();
     res.status(result.httpStatus).json(result.scan);
   } catch (error) { next(error); }
 });
@@ -84,3 +84,6 @@ app.listen(port, '0.0.0.0', () => console.log(`Homelab Control API listening on 
 // Refresh discovery once per minute, without preventing a clean process exit.
 void getProxmoxInventory();
 setInterval(() => { void getProxmoxInventory(); }, 60_000).unref();
+
+// LAN scanning is managed by the backend process, not a separate systemd timer.
+startLanScanner();
