@@ -110,3 +110,123 @@
 .lan-spin{animation:lan-rotate 1.3s linear infinite}
 @media(prefers-reduced-motion:reduce){.lan-spin{animation:none}}
 @media(max-width:730px){.lan-header-actions{width:100%;justify-content:space-between}}
+
+
+/* Sprint 3C: Network Detective overview, events and device history */
+.det-page{min-width:0}
+.det-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:22px;margin:-10px 0 20px}
+.det-intro{min-width:0}
+.det-overline{display:inline-flex;align-items:center;gap:7px;font-size:11px;font-weight:800;letter-spacing:1px;color:#b4c5f9}
+.det-intro p{font-size:13px;color:#b6c1d1;line-height:1.55;margin:8px 0 8px}
+.det-meta-line{font-size:11px;color:#7e8ea5;line-height:1.5}
+.det-header-actions{display:flex;align-items:center;gap:9px;flex-wrap:wrap;justify-content:flex-end}
+.det-header-actions .instance-toggle{white-space:nowrap}
+.det-header-actions .instance-toggle:disabled{opacity:.55;cursor:not-allowed}
+.det-info{display:flex;align-items:flex-start;gap:12px;border:1px solid #3a4c65;border-radius:10px;padding:16px 17px;background:#1a293b;color:#bdcdea;font-size:13px;line-height:1.65;margin-bottom:20px}
+.det-info svg{flex-shrink:0;color:#9db9ef;margin-top:2px}
+.det-tabs{display:flex;flex-wrap:wrap;gap:7px;border-bottom:1px solid #273242;margin-bottom:24px;padding:0 2px 11px}
+.det-tab{border:1px solid transparent;border-radius:8px;background:transparent;color:#93a3b9;font-size:13px;font-weight:700;padding:10px 18px;cursor:pointer}
+.det-tab:hover{background:#1d2735;color:#e4eafa}
+.det-tab.active,.det-tab[aria-pressed=true]{background:#283554;border-color:#516598;color:#dfe5ff}
+.det-tab:focus-visible,.det-link:focus-visible,.det-recent-device:focus-visible,.det-clear:focus-visible,.det-select-label select:focus-visible{outline:2px solid #a5b4fc;outline-offset:2px}
+.det-metrics{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px;margin:0 0 17px}
+.det-metric{background:#192330;border:1px solid #2a394b;border-radius:11px;padding:19px 15px;display:flex;flex-direction:column;align-items:flex-start;gap:8px;min-width:0}
+.det-metric svg{color:#a5b4fc}
+.det-metric strong{color:#e7eefb;font-size:29px;letter-spacing:-1px;line-height:1.15}
+.det-metric span{color:#91a3b9;font-size:12px}
+.det-metric:nth-child(2) svg{color:#6ee7b7}
+.det-metric:nth-child(3) svg{color:#fbbf24}
+.det-metric:nth-child(4) svg{color:#a7b4cb}
+.det-explainer{font-size:12px;color:#8295ad;line-height:1.7;margin:0 0 23px}
+.det-overview-grid{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,1fr);gap:17px;align-items:start}
+.det-overview-section{min-width:0}
+.det-overview-section .panel-title{flex-wrap:wrap}
+.det-overview-section .panel-title .text-action{white-space:nowrap}
+.det-events{list-style:none;margin:0;padding:0}
+.det-event{display:flex;align-items:flex-start;gap:13px;padding:17px 1px;border-top:1px solid #2a3545}
+.det-event:first-child{border-top:0;padding-top:6px}
+.det-event-icon{display:grid;place-items:center;width:34px;height:34px;flex-shrink:0;border-radius:9px;background:#243247;color:#a5b4fc}
+.det-event-icon.det-severity-info{background:#223344;color:#9db9ef}
+.det-event-icon.det-severity-warning{background:#3c3221;color:#fbbf24}
+.det-event-icon.det-severity-critical{background:#3a2630;color:#fda4af}
+.det-event-content{min-width:0;flex:1}
+.det-event-line{display:flex;align-items:baseline;justify-content:space-between;gap:12px}
+.det-event-line strong{font-size:13px;color:#e1e8f4;line-height:1.5}
+.det-severity-text{font-size:10px;text-transform:uppercase;letter-spacing:.7px;font-weight:850;white-space:nowrap}
+.det-severity-text.det-severity-info{color:#92add6}
+.det-severity-text.det-severity-warning{color:#fbbf24}
+.det-severity-text.det-severity-critical{color:#fda4af}
+.det-event-content p{font-size:12px;color:#96a6bd;margin:5px 0 10px;line-height:1.6;overflow-wrap:anywhere}
+.det-event-meta{display:flex;align-items:center;gap:8px 15px;flex-wrap:wrap;color:#71829b;font-size:11px;min-width:0}
+.det-mono{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:11px;overflow-wrap:anywhere}
+.det-event-meta time{margin-left:auto;white-space:nowrap;color:#8291a7}
+.det-link{display:inline-flex;align-items:center;gap:5px;color:#b9c8ff;font-size:12px;background:none;border:0;padding:2px 0;text-align:left;cursor:pointer;white-space:normal;overflow-wrap:anywhere}
+.det-link:hover{color:#e4eaff;text-decoration:underline}
+.det-recent-devices{display:flex;flex-direction:column;gap:2px}
+.det-recent-device{border:0;border-top:1px solid #2a3545;background:none;display:flex;align-items:center;gap:10px;width:100%;padding:13px 2px;text-align:left;cursor:pointer;color:#dce7f6;min-width:0}
+.det-recent-device:first-child{border-top:0}
+.det-recent-device:hover{background:#1d2a39}
+.det-device-symbol{display:grid;place-items:center;flex-shrink:0;color:#9ab0d2}
+.det-recent-identity{display:flex;flex-direction:column;gap:5px;flex:1;min-width:0}
+.det-recent-identity strong{font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.det-recent-identity small{font-size:11px;color:#8194ab;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.det-device-state{text-transform:uppercase;font-size:9px;flex-shrink:0}
+.det-state-online{background:#16352f;color:#6ee7b7;border-color:#285e50}
+.det-state-offline{background:#41331e;color:#fbbf24;border-color:#69522b}
+.det-state-known{background:#24334c;color:#9db9ef;border-color:#3c5274}
+.det-list-panel .panel-title{margin-bottom:21px}
+.det-list-panel .panel-title h2{display:flex;align-items:center;gap:8px}
+.det-toolbar{display:flex;align-items:flex-end;flex-wrap:wrap;gap:11px 15px;margin:0 0 15px}
+.det-search{max-width:410px;flex:2 1 260px}
+.det-select-label{display:flex;flex-direction:column;gap:6px;color:#8191a8;font-size:11px;font-weight:700}
+.det-select-label select{min-width:160px;max-width:250px;border:1px solid #394657;border-radius:8px;background:#1b2634;color:#dce4f0;padding:10px 12px;font-size:12px;cursor:pointer}
+.det-count{color:#8292a7;font-size:11px;margin:0 0 17px}
+.det-list-panel>.det-events{max-width:1000px}
+.det-list-panel>.det-events .det-event{padding:19px 8px}
+.det-list-panel>.det-events .det-event:first-child{padding-top:5px}
+.det-devices-table{min-width:920px}
+.det-device-cell{display:flex;align-items:flex-start;gap:10px;color:#a5b4fc}
+.det-device-cell>svg{margin-top:3px;flex-shrink:0}
+.det-device-cell span{display:flex;flex-direction:column;gap:4px;min-width:0}
+.det-device-cell strong{color:#e3ebf8;font-size:12px;overflow-wrap:anywhere}
+.det-device-cell small{font-size:11px;color:#8e9fb5}
+.det-devices-table td{vertical-align:middle}
+.det-devices-table td time{font-size:11px;color:#9eacc0;white-space:nowrap}
+.det-devices-table tr.det-row-selected td{background:#26344b}
+.det-details-panel{scroll-margin-top:25px}
+.det-details-heading{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:16px;padding:8px 0 18px;border-bottom:1px solid #2a3545}
+.det-details-heading>div{display:flex;flex-direction:column;gap:7px}
+.det-details-heading strong{font-size:18px;color:#eff3fa}
+.det-details-heading .det-mono{color:#93a3bb}
+.det-clear{display:inline-flex;align-items:center;gap:5px;color:#abbad0;background:none;border:1px solid #39485b;border-radius:7px;padding:8px 11px;cursor:pointer;font-size:12px}
+.det-clear:hover{border-color:#818cf8;color:#e8effb}
+.det-device-facts{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:21px 0 29px}
+.det-device-facts>div{min-width:0;background:#1b2533;border:1px solid #29394c;border-radius:9px;padding:12px}
+.det-device-facts dt{font-size:10px;font-weight:750;color:#8494ab;text-transform:uppercase;letter-spacing:.6px;margin-bottom:9px}
+.det-device-facts dd{font-size:12px;color:#d6e0ef;margin:0;overflow-wrap:anywhere;line-height:1.55}
+.det-subtitle{display:flex;align-items:center;gap:9px;font-size:14px;font-weight:700;color:#dce7f6;margin:0 0 18px}
+.det-subtitle svg{color:#a5b4fc}
+.det-note,.det-footer-note{font-size:11px;color:#8392a9;line-height:1.7;margin:18px 0 0}
+.det-footer-note{text-align:right;margin:8px 0 20px}
+@media(max-width:1180px){
+  .det-metrics{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .det-overview-grid{grid-template-columns:1fr}
+}
+@media(max-width:830px){
+  .det-device-facts{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .det-heading{flex-wrap:wrap}
+  .det-header-actions{justify-content:flex-start}
+}
+@media(max-width:600px){
+  .det-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .det-metric{padding:15px 13px}
+  .det-metric strong{font-size:26px}
+  .det-event-meta time{margin-left:0}
+  .det-device-facts{grid-template-columns:1fr 1fr}
+  .det-header-actions{width:100%}
+  .det-header-actions .instance-toggle{flex:1}
+  .det-tab{flex:1;padding:10px 12px}
+  .det-toolbar .det-search{min-width:0;flex-basis:100%;max-width:none}
+  .det-select-label{flex:1;min-width:130px}
+  .det-select-label select{max-width:none;min-width:0;width:100%}
+}
