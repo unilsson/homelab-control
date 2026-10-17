@@ -198,3 +198,47 @@ test('scanner rejects invalid network configuration before executing a command',
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('history observer runs only for complete successful scans; history errors preserve the LAN snapshot', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'homelab-detective-scanner-'));
+  const snapshot = join(dir, 'lan.json');
+  let payload = JSON.stringify(validDocument());
+  const callbacks: Array<{ scannedAt: string; scanId: string; length: number }> = [];
+  const scanner = new LanScanner({
+    enabled: true,
+    network: '192.168.1.0/24',
+    snapshotPath: snapshot,
+    command: '/opt/lanscan/bin/lanscan',
+    withOpnsense: false,
+    getOpnsenseLeases: async () => [],
+    execute: async () => ({ stdout: payload }),
+    now: Date.now,
+    onSuccessfulScan: (rows, scannedAt, scanId) => {
+      callbacks.push({ scannedAt, scanId, length: rows.results.length });
+    }
+  });
+  try {
+    scanner.requestScan(false);
+    await waitForState(scanner, 'completed');
+    assert.equal(callbacks.length, 1);
+    assert.equal(callbacks[0].length, 254);
+    assert.ok(callbacks[0].scanId);
+    const first = readFileSync(snapshot, 'utf8');
+
+    payload = '{incomplete';
+    scanner.requestScan(false);
+    await waitForState(scanner, 'failed');
+    assert.equal(callbacks.length, 1);
+    assert.equal(readFileSync(snapshot, 'utf8'), first);
+
+    payload = JSON.stringify(validDocument());
+    scanner.setSnapshotObserver(() => { throw new Error('sqlite secret details'); });
+    scanner.requestScan(false);
+    await waitForState(scanner, 'completed');
+    assert.match(scanner.info().message ?? '', /history could not be saved/);
+    assert.ok(!JSON.stringify(scanner.info()).includes('secret details'));
+    assert.equal(callbacks.length, 1);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
