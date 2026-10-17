@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, rename, unlink, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { promisify } from 'node:util';
-import { networkSpec, parseLanSnapshot, mergeOpnsenseLeases } from './lanscan.js';
+import { networkSpec, parseLanSnapshot, mergeOpnsenseLeases, type LanInventory } from './lanscan.js';
 import { fetchOpnsenseLeases, type DhcpLease } from './opnsense.js';
 
 const execFileAsync = promisify(execFile);
@@ -19,6 +19,10 @@ export type LanScanInfo = {
 };
 export type ScanResponse = { httpStatus: 202 | 409 | 429 | 503; scan: LanScanInfo };
 
+type SnapshotObserver = (
+  inventory: Pick<LanInventory, 'network' | 'results'>, scannedAt: string, scanId: string
+) => void | Promise<void>;
+
 type CommandOutput = { stdout: string };
 type Execute = (binary: string, args: string[], options: { timeout: number; maxBuffer: number }) => Promise<CommandOutput>;
 
@@ -31,6 +35,7 @@ type ScannerOptions = {
   getOpnsenseLeases: () => Promise<DhcpLease[]>;
   execute: Execute;
   now: () => number;
+  onSuccessfulScan?: SnapshotObserver;
 };
 
 const limits = {
@@ -54,10 +59,12 @@ const defaultOptions: ScannerOptions = {
 export class LanScanner {
   private readonly options: ScannerOptions;
   private requestedAtMs: number | null = null;
+  private snapshotObserver: SnapshotObserver | undefined;
   private current: LanScanInfo;
 
   constructor(options: ScannerOptions) {
     this.options = options;
+    this.snapshotObserver = options.onSuccessfulScan;
     this.current = {
       state: options.enabled ? 'idle' : 'unavailable',
       available: options.enabled,
@@ -69,6 +76,11 @@ export class LanScanner {
   }
 
   info(): LanScanInfo { return { ...this.current }; }
+
+  /** Register the persistent history sink before starting automatic scans. */
+  setSnapshotObserver(observer: SnapshotObserver): void {
+    this.snapshotObserver = observer;
+  }
 
   /**
    * Only the fixed, configured subnet can be scanned. Caller-supplied
@@ -114,6 +126,7 @@ export class LanScanner {
       const document = withOpnsense
         ? mergeOpnsenseLeases(arpDocument, network, await getOpnsenseLeases())
         : arpDocument;
+      const verifiedSnapshot = parseLanSnapshot(document, network);
       const dir = dirname(snapshotPath);
       await mkdir(dir, { recursive: true });
       const tempPath = snapshotPath + '.tmp-' + randomUUID();
@@ -125,8 +138,19 @@ export class LanScanner {
       } finally {
         await unlink(tempPath).catch(() => {});
       }
+      // Never generate history from failed/partial scans. If SQLite is unavailable
+      // after the atomic snapshot write, preserve the valid LAN snapshot and
+      // report the history problem independently instead of inventing events.
+      let historyFailed = false;
+      try {
+        await this.snapshotObserver?.(verifiedSnapshot, new Date(now()).toISOString(), randomUUID());
+      } catch {
+        historyFailed = true;
+        console.warn('[network-detective] Failed to persist network history.');
+      }
       this.current = {
-        ...this.current, state: 'completed', finishedAt: new Date(now()).toISOString()
+        ...this.current, state: 'completed', finishedAt: new Date(now()).toISOString(),
+        ...(historyFailed ? { message: 'LAN scan succeeded, but network history could not be saved.' } : {})
       };
     } catch (error) {
       // Never return stderr or API credentials to clients.
