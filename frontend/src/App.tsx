@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
-import { Activity, Boxes, LayoutDashboard, Radar, Settings2, Server, ShieldCheck, TriangleAlert, Clock3, RefreshCw, Cpu, Database, HardDrive, Layers3, ChevronDown, ChevronUp, Network } from 'lucide-react';
+import { Activity, Boxes, LayoutDashboard, Radar, Settings2, Server, ShieldCheck, TriangleAlert, Clock3, RefreshCw, Cpu, Database, HardDrive, Layers3, ChevronDown, ChevronUp, Network, Laptop2 } from 'lucide-react';
 import LanPage from './LanPage.js';
+import DetectivePage from './DetectivePage.js';
 
 type System = {
   id: number; name: string; type: string; status: string; host: string | null;
@@ -34,14 +35,14 @@ type OpnsenseStatus = {
   configured: boolean; state: 'disabled' | 'idle' | 'online' | 'error';
   lastCheckedAt: string | null; message?: string;
 };
-type Page = 'Dashboard' | 'Systems' | 'Services' | 'Actions' | 'Proxmox' | 'LAN' | 'Events' | 'Discoveries' | 'Analysis' | 'Integrations';
+type Page = 'Dashboard' | 'Systems' | 'Services' | 'Actions' | 'Proxmox' | 'LAN' | 'Detective' | 'Events' | 'Devices' | 'Integrations';
 
 const sections: { label: string; pages: Page[] }[] = [
   { label: 'OVERVIEW', pages: ['Dashboard'] },
   { label: 'COMMANDER', pages: ['Systems', 'Services', 'Actions'] },
   { label: 'VIRTUALIZATION', pages: ['Proxmox'] },
   { label: 'NETWORK', pages: ['LAN'] },
-  { label: 'DETECTIVE', pages: ['Events', 'Discoveries', 'Analysis'] },
+  { label: 'DETECTIVE', pages: ['Detective', 'Events', 'Devices'] },
   { label: 'SETTINGS', pages: ['Integrations'] }
 ];
 
@@ -53,8 +54,9 @@ function iconFor(page: Page) {
   if (page === 'Proxmox') return <Layers3 size={17} />;
   if (page === 'LAN') return <Network size={17} />;
   if (page === 'Events') return <Clock3 size={17} />;
+  if (page === 'Devices') return <Laptop2 size={17} />;
   if (page === 'Integrations') return <Settings2 size={17} />;
-  if (page === 'Discoveries' || page === 'Analysis') return <Radar size={17} />;
+  if (page === 'Detective') return <Radar size={17} />;
   return <Boxes size={17} />;
 }
 
@@ -211,11 +213,11 @@ export default function App() {
       <nav>{sections.map(group => <div key={group.label} className="nav-group"><div className="nav-label">{group.label}</div>{group.pages.map(item =>
         <button type="button" key={item} onClick={() => setPage(item)} className={page === item ? 'nav-item active' : 'nav-item'}>{iconFor(item)}<span>{item}</span></button>
       )}</div>)}</nav>
-      <div className="sidebar-bottom">SPRINT 2 <span>v0.2.0</span></div>
+      <div className="sidebar-bottom">SPRINT 3C <span>v0.3.0</span></div>
     </aside>
     <main className="main">
       <header className="topbar"><span>Infrastructure / <strong>{page}</strong></span><div className="header-actions"><button className="refresh" type="button" onClick={() => { setLoading(true); setRefreshKey(k => k + 1); }} aria-label="Refresh data" title="Refresh data"><RefreshCw size={16}/></button><span className={online ? 'connection online' : 'connection offline'}><span className="dot"/>{online ? 'API ONLINE' : 'API OFFLINE'}</span></div></header>
-      <div className="content"><div className="eyebrow">HOMELAB CONTROL / {page.toUpperCase()}</div><h1>{page}</h1><p className="subhead">{page === 'Dashboard' ? 'Your infrastructure, all in one place.' : page === 'Proxmox' ? 'Your Proxmox servers and virtual workloads.' : page === 'LAN' ? 'All local IPv4 addresses, used and apparently free.' : 'Infrastructure control and observability.'}</p>
+      <div className="content"><div className="eyebrow">HOMELAB CONTROL / {page.toUpperCase()}</div><h1>{page}</h1><p className="subhead">{page === 'Dashboard' ? 'Your infrastructure, all in one place.' : page === 'Proxmox' ? 'Your Proxmox servers and virtual workloads.' : page === 'LAN' ? 'All local IPv4 addresses, used and apparently free.' : page === 'Detective' ? 'Network changes and device activity at a glance.' : page === 'Events' ? 'A searchable timeline of network changes.' : page === 'Devices' ? 'Known devices and their historical activity.' : 'Infrastructure control and observability.'}</p>
       {apiError && <div className="notice"><TriangleAlert size={17}/> Unable to reach Homelab Control API. Data may be stale.</div>}
       {page === 'Dashboard' ? <>
         <div className="cards">
@@ -274,10 +276,15 @@ export default function App() {
         {infisical.message && <div className="notice"><TriangleAlert size={17}/>{infisical.message}</div>}
         {!infisical.configured && <div className="empty">Infisical is not configured. Set Machine Identity credentials in your local deployment environment.</div>}
       </section> </> :
-      page === 'Events' ? <section className="panel"><h2>Events</h2>{events.length ? events.map(e => <div className="row" key={e.id}><strong>{e.message}</strong><span>{e.severity} · {e.created_at}</span></div>) : <div className="empty">No events recorded yet.</div>}</section> :
-      page === 'Discoveries' ? <section className="panel"><h2>Discovered infrastructure</h2>{systemRows}</section> :
+      page === 'Detective' || page === 'Events' || page === 'Devices' ?
+        <DetectivePage
+          view={page === 'Detective' ? 'overview' : page === 'Events' ? 'events' : 'devices'}
+          refreshKey={refreshKey}
+          onNavigate={view => setPage(view === 'overview' ? 'Detective' : view === 'events' ? 'Events' : 'Devices')}
+          onOpenLan={() => setPage('LAN')}
+        /> :
       <section className="panel"><h2>{page}</h2><div className="empty">This module will be enabled in a later sprint.</div></section>}
-      <footer>HOMELAB CONTROL · PROXMOX DISCOVERY · {loading ? 'REFRESHING…' : '2026'}</footer></div>
+      <footer>HOMELAB CONTROL · NETWORK DETECTIVE · {loading ? 'REFRESHING…' : '2026'}</footer></div>
     </main>
   </div>;
 }
