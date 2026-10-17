@@ -230,3 +230,32 @@
   .det-select-label{flex:1;min-width:130px}
   .det-select-label select{max-width:none;min-width:0;width:100%}
 }
+
+
+/* Sprint 3D: notification status and durable outbound history */
+.notifications-page .panel-title h2{display:flex;align-items:center;gap:9px}
+.notifications-page .panel-title h2 svg{color:#a5b4fc}
+.notification-metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:17px 0 20px}
+.notification-metric{display:flex;flex-direction:column;gap:7px;padding:19px 17px;border:1px solid #303b4c;border-radius:9px;background:#1c2735}
+.notification-metric strong{font-size:27px;color:#e7edfa;line-height:1.2}
+.notification-metric span{font-size:11px;color:#98a8bc}
+.notification-config{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:13px}
+.notification-config>div{display:flex;flex-direction:column;gap:7px;border:1px solid #2c394b;border-radius:8px;padding:13px;min-width:0}
+.notification-config span{font-size:10px;font-weight:750;text-transform:uppercase;letter-spacing:.5px;color:#8392a9}
+.notification-config strong{color:#d6e1f1;font-size:12px;overflow-wrap:anywhere;line-height:1.6}
+.notification-table{min-width:850px}
+.notification-event-name{display:flex;align-items:center;gap:9px;color:#a5b4fc}
+.notification-event-name strong{color:#dce7f6;font-size:12px}
+.notification-identity{display:flex;flex-direction:column;gap:5px}
+.notification-identity strong{color:#c4d0e0;font-size:11px;font-weight:650}
+.notification-identity span{color:#8799af;font-size:11px;overflow-wrap:anywhere}
+.notification-state{display:inline-block;padding:5px 8px;font-size:10px;font-weight:800;letter-spacing:.4px;border:1px solid #445268;border-radius:6px;color:#b6c2d6;background:#283545}
+.notification-state-accepted{color:#6ee7b7;border-color:#285e50;background:#16352f}
+.notification-state-failed{color:#fda4af;border-color:#663442;background:#3a222f}
+.notification-state-retry,.notification-state-sending{color:#fbbf24;border-color:#69522b;background:#41331e}
+.notification-state-suppressed{color:#9cabc0;background:#283140;border-color:#3a4557}
+.notification-state-pending{color:#a5b4fc;background:#27324c;border-color:#485d89}
+.notification-reason{display:block;color:#92a1b6;font-size:11px;margin-top:7px;line-height:1.5}
+.notifications-page .det-info code{color:#e0e7ff;overflow-wrap:anywhere}
+@media(max-width:1000px){.notification-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.notification-config{grid-template-columns:1fr 1fr}}
+@media(max-width:600px){.notification-config{grid-template-columns:1fr}.notification-metric{padding:14px}}
