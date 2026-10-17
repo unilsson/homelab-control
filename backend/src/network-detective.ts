@@ -143,16 +143,17 @@ export class NetworkDetective {
     inventory: Pick<LanInventory, 'network' | 'results'>,
     scannedAt: string,
     scanId: string
-  ): void {
+  ): number[] {
     const { network, results } = inventory;
     if (!Number.isFinite(Date.parse(scannedAt)) || !scanId) {
       throw new Error('Invalid Network Detective scan metadata');
     }
-    const apply = this.database.transaction(() => {
+    const apply = this.database.transaction((): number[] => {
+      const insertedEventIds: number[] = [];
       const previousScan = this.database.prepare(
         'SELECT scan_count, last_scan_id FROM network_scan_state WHERE network = ?'
       ).get(network) as { scan_count: number; last_scan_id: string } | undefined;
-      if (previousScan?.last_scan_id === scanId) return;
+      if (previousScan?.last_scan_id === scanId) return [];
       const baseline = !previousScan;
       const known = new Map<string, DeviceRow>(
         (this.database.prepare('SELECT * FROM network_devices WHERE network = ?')
@@ -173,7 +174,10 @@ export class NetworkDetective {
         mac: string | null, ip: string | null,
         before: string | null = null, after: string | null = null
       ): void => {
-        if (!baseline) events.run(network, mac, ip, type, severity, before, after, scannedAt);
+        if (!baseline) {
+          const inserted = events.run(network, mac, ip, type, severity, before, after, scannedAt);
+          insertedEventIds.push(Number(inserted.lastInsertRowid));
+        }
       };
 
       const insertDevice = this.database.prepare(`
@@ -285,8 +289,9 @@ export class NetworkDetective {
           last_scan_id = excluded.last_scan_id,
           last_scanned_at = excluded.last_scanned_at
       `).run(network, scanId, scannedAt);
+      return insertedEventIds;
     });
-    apply();
+    return apply();
   }
 
   summary(network: string): {

@@ -594,3 +594,69 @@ Open **http://localhost:8080** and test these acceptance criteria:
 No database migration is necessary specifically for Sprint 3C. Keep
 ThinkPad on \`main\` until user acceptance and merge. The existing Ansible
 deployment can then update ThinkPad normally.
+
+## Sprint 3D — Internal Pushover Proxy notifications
+
+Homelab Control uses the existing **LAN-only Pushover Proxy** and never stores
+Pushover user tokens or API tokens. Contract: `POST /api/pushover/send` with
+`Content-Type: application/json`, body `{"title":"...","text":"..."}`.
+Only `text` is mandatory. HTTP **200** means the proxy accepted the request,
+not that a phone definitely received the push; HTTP **422** rejects bad input.
+
+### Configure on Lenovo
+
+Edit the machine's existing **local** `.env` and add:
+
+```dotenv
+NETWORK_NOTIFICATIONS_ENABLED=false
+NETWORK_NOTIFICATIONS_PROXY_URL=http://api.ulnihnw.net/api/pushover/send
+NETWORK_NOTIFICATIONS_EVENT_TYPES=NEW_DEVICE,IP_CONFLICT
+NETWORK_NOTIFICATIONS_COOLDOWN_MINUTES=60
+```
+
+Restart: `docker compose up -d --build`.
+Open **DETECTIVE → Notifications** or inspect:
+
+```bash
+curl -fsS http://localhost:3001/api/notifications/status | jq
+curl -fsS 'http://localhost:3001/api/notifications/history?limit=20' | jq
+```
+
+**Disabled by default.** To allow actual phone notifications, explicitly set
+`NETWORK_NOTIFICATIONS_ENABLED=true` and restart the backend with
+`docker compose up -d --force-recreate backend`. The proxy must be reachable
+from the backend host on the trusted LAN. There are no browser send endpoints.
+
+Defaults: `NEW_DEVICE` (only newly discovered via ARP, not DHCP-only) and
+`IP_CONFLICT`. Other supported opt-ins: `DEVICE_ONLINE`, `DEVICE_OFFLINE`,
+`IP_CHANGED`, `MAC_CHANGED`, `CONFLICT_RESOLVED`, `DHCP_CHANGED`.
+
+### Protection against notification spam
+
+- Notification outbox is written to SQLite in the same transaction as
+  Network Detective events. Failed scans cannot enqueue pushes, and the
+  first successful scan remains a silent baseline.
+- A 60-minute cooldown per event type and MAC/IP suppresses duplicates;
+  a burst limit queues at most 10 per scan, prioritizing conflicts.
+- At most 3 HTTP attempts per 10 minutes, with no more than 4 attempts
+  per notification. Temporary network errors, HTTP 429 and HTTP 5xx are
+  retried after 1, 2, then 5 minutes. HTTP 422 is a permanent failure.
+- Queue state, retry outcomes and suppressed entries survive restarts.
+  Raw errors, response bodies and credentials are not persisted.
+- HTTP 200 is reported as **Accepted by proxy**, not **Delivered**.
+  In the rare event of a crash after the proxy accepts the request, a
+  retry can cause a duplicate push; exactly-once delivery is not possible
+  without an idempotency feature on the proxy.
+
+### Sprint 3D acceptance
+
+1. Verify green GitHub Actions CI and a successful Docker build.
+2. With notifications disabled, verify the UI shows disabled and sends nothing.
+3. Enable on Lenovo only, and verify Ready status via the API and UI.
+4. Trigger a safe, real new-device observation after the baseline and verify
+   one Accepted by proxy record and a corresponding phone notification.
+5. Verify older LAN/Proxmox/Detective features remain intact.
+6. Merge only after explicit approval. Later, turn off the Lenovo notifier
+   when enabling on ThinkPad to avoid duplicated pushes from two scanners.
+
+Because this proxy uses HTTP, ensure it stays on the trusted LAN only.
