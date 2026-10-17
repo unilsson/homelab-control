@@ -490,3 +490,56 @@ and should be reviewed/removed with administrator privileges.
 enabled, no active DHCP lease or static reservation. Sleeping/static hosts
 can still escape discovery. Never automatically allocate IP addresses based
 only on this scan.
+
+## Sprint 3B — Network Detective engine (backend only)
+
+Sprint 3B adds **change detection and durable SQLite history** to the existing
+15-minute LAN scanner. It does not add a new browser page yet; that belongs to
+Sprint 3C. No change is made to OPNsense/Infisical credentials.
+
+- Devices have stable, lowercase MAC identifiers scoped by LAN subnet.
+- Each **successful complete scan** updates `network_devices` and creates
+  change records in `network_events` (stored in the existing
+  `./data/homelab.sqlite` bind mount). Full scans are not duplicated in SQLite.
+- The initial scan establishes a **silent baseline**. Later scans detect:
+  `NEW_DEVICE`, `DEVICE_ONLINE`, `DEVICE_OFFLINE`, `IP_CHANGED`,
+  `MAC_CHANGED`, `IP_CONFLICT`, `CONFLICT_RESOLVED`, `DHCP_CHANGED`.
+- **Offline requires two consecutive successful scans without ARP**, even if a
+  static DHCP reservation remains. A DHCP-only device is `known`, **not**
+  `online`. Failed, incomplete or rejected scans do not update history.
+- Network Detective persists its changes in one SQLite transaction.
+  Reprocessing the same scan ID is idempotent. If SQLite history fails, the
+  previously validated LAN snapshot is kept and the scanner reports a generic
+  history warning; no secrets appear in HTTP responses.
+- Reserved `display_name` and `category` columns will support user-edited
+  device labels in a future authenticated sprint. No unauthenticated edit routes
+  or notifications are introduced in Sprint 3B.
+
+### Test on Lenovo after updating the Sprint 3B branch
+
+```bash
+cd ~/Development/homelab-control
+docker compose up -d --build
+curl -fsS http://localhost:3001/api/network/detective/summary | jq
+curl -fsS 'http://localhost:3001/api/network/devices?limit=10' | jq
+curl -fsS 'http://localhost:3001/api/network/events?limit=20' | jq
+```
+
+The summary includes `scans`, `lastScannedAt`, `totalDevices`, `online`,
+`offline`, `known` and `events`. On the first successful scan all events
+are suppressed so the initial inventory doesn't flood the history. New events
+appear only when subsequent successful scans detect changes.
+
+Filter events by a device:
+
+```bash
+curl -fsS 'http://localhost:3001/api/network/events?mac=aa:bb:cc:dd:ee:ff&limit=20' | jq
+curl -fsS 'http://localhost:3001/api/network/devices/aa:bb:cc:dd:ee:ff/events' | jq
+```
+
+Read-only endpoints use strict MAC validation and bounded pagination limits.
+On ThinkPad use port **3002** after user acceptance, merge to `main`, and
+the existing Ansible deploy. Back up `./data/homelab.sqlite` safely before
+initial production deployment (for example with SQLite's online backup API).
+The new tables are additive and existing Proxmox, systems and events data
+remain intact. `./data` is never committed to Git.
