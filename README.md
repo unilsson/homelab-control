@@ -543,3 +543,54 @@ the existing Ansible deploy. Back up `./data/homelab.sqlite` safely before
 initial production deployment (for example with SQLite's online backup API).
 The new tables are additive and existing Proxmox, systems and events data
 remain intact. `./data` is never committed to Git.
+
+## Sprint 3C — Network Detective UI
+
+The **DETECTIVE** navigation now has real **Detective**, **Events** and
+**Devices** pages, powered exclusively by the read-only Sprint 3B APIs:
+
+- **Detective → Overview:** current known/online/offline/DHCP-only counts,
+  total recorded changes, recent events, recently seen devices, and links
+  to the LAN inventory. DHCP-only devices are not presented as online.
+- **Detective → Events:** searchable event timeline, with severity and event
+  type filters. Displays the **latest 100 events** (not the entire history);
+  the total number of retained events is shown separately. A device name
+  opens its history directly.
+- **Detective → Devices:** searchable MAC-based device registry, filters
+  for ONLINE / OFFLINE / DHCP only, and a detail panel with IP, hostname,
+  vendor, first/last seen times and **per-device change history**.
+  Device history requests use the dedicated read-only endpoint and show
+  the latest 100 matching events.
+- Pages refresh every 30 seconds while open; a refresh button forces an
+  immediate request. API errors preserve the last successfully loaded data
+  with a visible warning. Empty/baseline states explain why no events exist.
+- Responsive dark UI; keyboard-accessible buttons and inputs, readable
+  timestamps and explicit status labels. No new write operations, logins,
+  integrations or configuration files.
+
+### Test on Lenovo (before merge)
+
+\`\`\`bash
+cd ~/Development/homelab-control
+git fetch origin
+git switch --track origin/sprint-3c-network-detective-ui
+docker compose up -d --build
+\`\`\`
+
+Open **http://localhost:8080** and test these acceptance criteria:
+
+1. **DETECTIVE → Detective** loads real counters from
+   \`GET /api/network/detective/summary\` and recent events/devices.
+2. **DETECTIVE → Events** searches and filters the latest 100 recorded
+   network events; clicking a known device opens its history.
+3. **DETECTIVE → Devices** searches by hostname, IP, vendor or MAC; the
+   ONLINE/OFFLINE/DHCP-only filters work; clicking **Details** loads that
+   device's events.
+4. **NETWORK → LAN**, Proxmox, Settings → Integrations and the Dashboard
+   still work. A new complete LAN scan eventually refreshes Detective.
+5. If there is no event history, the UI shows a calm empty state: the
+   first successful scan is always a silent baseline, by design.
+
+No database migration is necessary specifically for Sprint 3C. Keep
+ThinkPad on \`main\` until user acceptance and merge. The existing Ansible
+deployment can then update ThinkPad normally.
