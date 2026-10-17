@@ -118,7 +118,10 @@ test('DHCP-only new devices do not send; IP conflicts are prioritized', async ()
     calls.push(message.title); return 200;
   });
   try {
-    t.scan(snapshot());
+    const baseline = snapshot();
+    arp(baseline, 98, 'aa:bb:cc:dd:ee:01');
+    arp(baseline, 99, 'aa:bb:cc:dd:ee:02');
+    t.scan(baseline);
     const next = snapshot();
     reserved(next, 8, 'aa:bb:cc:dd:ee:08');
     arp(next, 40, 'aa:bb:cc:dd:ee:40');
@@ -135,7 +138,8 @@ test('DHCP-only new devices do not send; IP conflicts are prioritized', async ()
 
 test('repeat conflicts within cooldown are suppressed, without a second POST', async () => {
   const calls: string[] = [];
-  const t = setup(async (_, message) => { calls.push(message.title); return 200; });
+  const t = setup(async (_, message) => { calls.push(message.title); return 200; },
+    { eventTypes: ['IP_CONFLICT'] });
   try {
     t.scan(snapshot());
     const c = snapshot();
