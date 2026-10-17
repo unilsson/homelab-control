@@ -5,7 +5,21 @@ import { getProxmoxInventory } from './integrations/proxmox.js';
 import { getInfisicalStatus } from './integrations/infisical.js';
 import { getOpnsenseStatus } from './integrations/opnsense.js';
 import { readLanInventory } from './integrations/lanscan.js';
-import { getLanScanInfo, requestLanScan, startLanScanner } from './integrations/lanscan-scan.js';
+import { getLanScanInfo, requestLanScan, startLanScanner, lanScanner } from './integrations/lanscan-scan.js';
+import { NetworkDetective, normalizeMac } from './network-detective.js';
+
+const detective = new NetworkDetective(db);
+lanScanner.setSnapshotObserver((inventory, scannedAt, scanId) => {
+  detective.recordScan(inventory, scannedAt, scanId);
+});
+const configuredLan = process.env.LANSCAN_NETWORK?.trim() || '192.168.1.0/24';
+
+function queryLimit(value: unknown, fallback: number, maximum: number): number | null {
+  if (value === undefined) return fallback;
+  if (typeof value !== 'string' || !/^[1-9][0-9]{0,2}$/.test(value)) return null;
+  const limit = Number(value);
+  return limit <= maximum ? limit : null;
+}
 
 const app = express();
 app.disable('x-powered-by');
@@ -42,6 +56,37 @@ app.get('/api/integrations/proxmox', async (_req, res, next) => {
 app.get('/api/network/lan', async (_req, res, next) => {
   try { res.json({ ...await readLanInventory(), scan: getLanScanInfo() }); }
   catch (error) { next(error); }
+});
+
+// Sprint 3B: read-only Network Detective API. Editing and notifications are
+// intentionally reserved for later sprints (no authentication exists yet).
+app.get('/api/network/detective/summary', (_req, res) => {
+  res.json(detective.summary(configuredLan));
+});
+
+app.get('/api/network/devices', (req, res) => {
+  const limit = queryLimit(req.query.limit, 100, 500);
+  if (limit === null) { res.status(400).json({ error: 'Invalid limit (1–500).' }); return; }
+  res.json(detective.listDevices(configuredLan, limit));
+});
+
+app.get('/api/network/events', (req, res) => {
+  const limit = queryLimit(req.query.limit, 50, 100);
+  if (limit === null) { res.status(400).json({ error: 'Invalid limit (1–100).' }); return; }
+  const value = req.query.mac;
+  const mac = typeof value === 'string' ? normalizeMac(value) : null;
+  if (value !== undefined && !mac) {
+    res.status(400).json({ error: 'Invalid MAC filter.' }); return;
+  }
+  res.json(detective.listEvents(configuredLan, limit, mac ?? undefined));
+});
+
+app.get('/api/network/devices/:mac/events', (req, res) => {
+  const limit = queryLimit(req.query.limit, 50, 100);
+  if (limit === null) { res.status(400).json({ error: 'Invalid limit (1–100).' }); return; }
+  const mac = normalizeMac(req.params.mac);
+  if (!mac) { res.status(400).json({ error: 'Invalid MAC address.' }); return; }
+  res.json(detective.listEvents(configuredLan, limit, mac));
 });
 
 // Execute a fixed, configured lanscan command with concurrency and cooldown limits.
