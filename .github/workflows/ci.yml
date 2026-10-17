@@ -20,7 +20,7 @@ jobs:
         run: |
           npm install --prefix backend
           npm run build --prefix backend
-      - name: Test Proxmox discovery and LAN snapshots
+      - name: Test integrations, LAN snapshots and Network Detective history
         run: npm run test --prefix backend
       - name: Validate scanner shim syntax
         run: sh -n backend/docker/sudo
@@ -45,6 +45,10 @@ jobs:
           curl -fsS http://127.0.0.1:3199/api/integrations/proxmox | node -e "let b='';process.stdin.on('data',d=>b+=d).on('end',()=>{if(JSON.parse(b).state!=='disabled') process.exit(1)})"
           curl -fsS http://127.0.0.1:3199/api/systems | node -e "let b='';process.stdin.on('data',d=>b+=d).on('end',()=>{if(!Array.isArray(JSON.parse(b))) process.exit(1)})"
           curl -fsS http://127.0.0.1:3199/api/network/lan | node -e "let b='';process.stdin.on('data',d=>b+=d).on('end',()=>{const x=JSON.parse(b);if(x.state!=='missing'||!Array.isArray(x.results))process.exit(1)})"
+          curl -fsS http://127.0.0.1:3199/api/network/detective/summary | node -e "let b='';process.stdin.on('data',d=>b+=d).on('end',()=>{const x=JSON.parse(b);if(x.scans!==0||x.totalDevices!==0||x.events!==0)process.exit(1)})"
+          curl -fsS http://127.0.0.1:3199/api/network/devices | node -e "let b='';process.stdin.on('data',d=>b+=d).on('end',()=>{if(!Array.isArray(JSON.parse(b)))process.exit(1)})"
+          curl -fsS http://127.0.0.1:3199/api/network/events | node -e "let b='';process.stdin.on('data',d=>b+=d).on('end',()=>{if(!Array.isArray(JSON.parse(b)))process.exit(1)})"
+          test "$(curl -sS -o /dev/null -w '%{http_code}' 'http://127.0.0.1:3199/api/network/events?limit=10000')" = "400"
           curl -fsS http://127.0.0.1:3199/api/integrations/opnsense | node -e "let b='';process.stdin.on('data',d=>b+=d).on('end',()=>{const x=JSON.parse(b);if(x.state!=='disabled'||x.configured!==false||JSON.stringify(x).includes('api_key'))process.exit(1)})"
           # Outside Docker the scanner is disabled, so no scan executes in CI.
           test "$(curl -sS -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:3199/api/network/lan/scan)" = "503"
