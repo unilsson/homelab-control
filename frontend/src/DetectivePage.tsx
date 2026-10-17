@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Activity, AlertTriangle, ArrowRight, Clock3, History, Laptop2,
   Network, RefreshCw, Search, Server, ShieldAlert, Wifi, WifiOff, X
