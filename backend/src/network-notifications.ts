@@ -109,7 +109,7 @@ export const sendToInternalDiscordProxy: NotificationTransport = async (url, mes
     const response = await fetch(url, {
       method: 'POST', redirect: 'error',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: JSON.stringify({ text: (message.title + '\n' + message.text).replace(/@/g, '@\\u200b') }),
+      body: JSON.stringify({ text: (message.title + '\n' + message.text).replace(/@/g, '@\u200b') }),
       signal: controller.signal
     });
     return response.status;
