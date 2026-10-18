@@ -666,11 +666,15 @@ Because this proxy uses HTTP, ensure it stays on the trusted LAN only.
 Homelab Control now supports **two independent LAN-only notification proxies**:
 
 - Pushover: `POST http://api.ulnihnw.net/api/pushover/send`, JSON `{title,text}`.
-- Discord: `POST http://api.ulnihnw.net/api/discord/send`, JSON `{text}`.
+- Discord: `POST http://api.ulnihnw.net/api/discord/send`, JSON `{text,kanal}`.
 
 The Discord Proxy is already part of the homelab. It holds Discord's actual
 webhook credentials; **do not put a Discord webhook URL, token or bot key into
-Homelab Control**. The backend sends plain notification text to the proxy.
+Homelab Control**. The backend sends plain notification text with the explicit
+channel alias `kanal: "homelab-control"` so it never relies on the proxy's
+fallback/default channel. The alias must exist in the Discord Proxy's
+`DISCORD_WEBHOOKS` mapping; aliases are case-sensitive. Unknown aliases return
+HTTP 400, which the notifier records as a permanent failure (not retried).
 No new public routes, send buttons or unauthenticated write endpoints are added.
 
 ### Architecture
@@ -691,6 +695,7 @@ from Pushover. Add these variables to Lenovo's existing local `.env`:
 ```dotenv
 NETWORK_DISCORD_NOTIFICATIONS_ENABLED=false
 NETWORK_DISCORD_NOTIFICATIONS_PROXY_URL=http://api.ulnihnw.net/api/discord/send
+NETWORK_DISCORD_NOTIFICATIONS_CHANNEL=homelab-control
 NETWORK_DISCORD_NOTIFICATIONS_EVENT_TYPES=NEW_DEVICE,IP_CONFLICT
 NETWORK_DISCORD_NOTIFICATIONS_COOLDOWN_MINUTES=60
 ```
@@ -724,15 +729,20 @@ Each tab shows only its own queue, rules, status and attempt history.
    ```bash
    curl -i -X POST http://api.ulnihnw.net/api/discord/send \
      -H 'Content-Type: application/json' \
-     -d '{"text":"Homelab Control – test av interna Discord Proxy"}'
+     -d '{"text":"Homelab Control – test av interna Discord Proxy","kanal":"homelab-control"}'
    ```
 
 4. Set `NETWORK_DISCORD_NOTIFICATIONS_ENABLED=true` **only on Lenovo**,
-   recreate the backend, and confirm `state=ready` under the Discord tab.
-5. When a genuine new ARP device or IP conflict occurs after the baseline,
+   recreate the backend, and confirm `state=ready` and the intended destination
+   `homelab-control` under the Discord tab. A `ready` status only verifies
+   configuration syntax; it does not prove the channel alias exists in the proxy.
+5. Ensure the proxy has a webhook alias named `homelab-control`, and restart
+   it after updating its own `.env`. The proxy also supports its own default
+   channel, but this application always selects `homelab-control` explicitly.
+6. When a genuine new ARP device or IP conflict occurs after the baseline,
    verify the Discord notification appears and the corresponding history
    entry becomes `accepted`. Pushover should operate independently.
-6. Approve the PR before merging; on ThinkPad, enable only the channels
+7. Approve the PR before merging; on ThinkPad, enable only the channels
    that should actually notify. Avoid enabling identical alerts on both
    Lenovo and ThinkPad to prevent duplicates.
 
