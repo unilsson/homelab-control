@@ -9,6 +9,7 @@ type NotificationStatus = {
   state: 'disabled' | 'ready' | 'error';
   provider: 'internal_pushover_proxy' | 'internal_discord_proxy';
   channel?: NotificationChannel;
+  destinationChannel?: string;
   eventTypes: string[];
   cooldownMinutes: number;
   counts: { pending: number; retry: number; accepted: number; failed: number; suppressed: number };
@@ -171,6 +172,9 @@ export default function NotificationsPage({ refreshKey }: { refreshKey: number }
       </div>
 
       <div className="notification-config">
+        {channel === 'discord' && <div><span>Discord channel</span>
+          <strong>{status?.destinationChannel || 'homelab-control'}</strong>
+        </div>}
         <div><span>Enabled event types</span><strong>{status?.eventTypes.join(', ') || 'None'}</strong></div>
         <div><span>Duplicate cooldown</span><strong>{status?.cooldownMinutes ?? '—'} minutes</strong></div>
         <div><span>Last proxy attempt</span><strong>{displayTime(status?.lastAttemptAt || null)}</strong></div>
