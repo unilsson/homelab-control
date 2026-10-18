@@ -26,7 +26,7 @@ function snapshot(host = 0): Pick<LanInventory, 'network' | 'results'> {
 
 test('Discord is opt-in and its URL is validated independently from Pushover', () => {
   assert.deepEqual(loadDiscordNotificationOptions({}), {
-    channel: 'discord', enabled: false,
+    channel: 'discord', discordChannel: 'homelab-control', enabled: false,
     proxyUrl: discordUrl, eventTypes: ['NEW_DEVICE', 'IP_CONFLICT'],
     cooldownMs: 3_600_000
   });
@@ -36,15 +36,17 @@ test('Discord is opt-in and its URL is validated independently from Pushover', (
   assert.equal(validateProxyUrl('https://discord.com/api/webhooks/1/SECRET', 'discord'), false);
   const configured = loadDiscordNotificationOptions({
     NETWORK_DISCORD_NOTIFICATIONS_ENABLED: 'true',
+    NETWORK_DISCORD_NOTIFICATIONS_CHANNEL: 'homelab-alerts',
     NETWORK_DISCORD_NOTIFICATIONS_EVENT_TYPES: 'IP_CONFLICT,DEVICE_OFFLINE,BOGUS',
     NETWORK_DISCORD_NOTIFICATIONS_COOLDOWN_MINUTES: '15'
   });
   assert.equal(configured.enabled, true);
+  assert.equal(configured.discordChannel, 'homelab-alerts');
   assert.deepEqual(configured.eventTypes, ['IP_CONFLICT', 'DEVICE_OFFLINE']);
   assert.equal(configured.cooldownMs, 900_000);
 });
 
-test('Discord proxy transport sends JSON text only, never Discord webhook credentials', async () => {
+test('Discord proxy sends named kanal and text, never a webhook credential', async () => {
   const original = globalThis.fetch;
   let calls = 0;
   globalThis.fetch = async (url, init) => {
@@ -52,9 +54,11 @@ test('Discord proxy transport sends JSON text only, never Discord webhook creden
     assert.equal(url, discordUrl);
     assert.equal(init?.method, 'POST');
     assert.equal(init?.redirect, 'error');
-    const payload = JSON.parse(String(init?.body)) as { text: string };
+    const payload = JSON.parse(String(init?.body)) as { text: string; kanal: string };
+    assert.equal(payload.kanal, 'homelab-control');
+    assert.deepEqual(Object.keys(payload).sort(), ['kanal', 'text']);
     if (calls === 1) {
-      assert.deepEqual(payload, { text: 'Homelab Control – Ny enhet\nHändelse: Ny enhet' });
+      assert.deepEqual(payload, { text: 'Homelab Control – Ny enhet\nHändelse: Ny enhet', kanal: 'homelab-control' });
     } else {
       assert.doesNotMatch(payload.text, /@everyone|@here/);
       assert.match(payload.text, /everyone/);
@@ -93,7 +97,8 @@ test('both channels independently enqueue, send, retry and persist their own his
   const discord = new NetworkNotifications(db, {
     ...loadDiscordNotificationOptions({ NETWORK_DISCORD_NOTIFICATIONS_ENABLED: 'true' }),
     now: () => now,
-    send: async (url, message) => {
+    send: async (url, message, kanal) => {
+      assert.equal(kanal, 'homelab-control');
       discordCalls++;
       assert.equal(url, discordUrl);
       assert.match(message.title, /Ny enhet/);
@@ -216,4 +221,38 @@ test('existing Pushover records survive initialization of the Discord channel', 
     assert.equal(push.history().length, 1);
     assert.equal(push.status().counts.accepted, 1);
   } finally { db.close(); }
+});
+
+test('Discord channel alias is passed through the queue and HTTP 400 is not retried', async () => {
+  const db = new Database(':memory:');
+  const detective = new NetworkDetective(db);
+  let sends = 0;
+  const discord = new NetworkNotifications(db, {
+    ...loadDiscordNotificationOptions({
+      NETWORK_DISCORD_NOTIFICATIONS_ENABLED: 'true',
+      NETWORK_DISCORD_NOTIFICATIONS_CHANNEL: 'homelab-control'
+    }),
+    send: async (url, message, kanal) => {
+      assert.equal(url, discordUrl);
+      assert.equal(kanal, 'homelab-control');
+      assert.match(message.text, /192\\.168\\.1\\.51/);
+      sends++;
+      return 400; // Discord Proxy returns 400 for an unknown kanal alias
+    }
+  });
+  try {
+    detective.recordScan(snapshot(0), '2026-10-18T10:00:00Z', 'baseline');
+    const ids = detective.recordScan(snapshot(51), '2026-10-18T10:15:00Z', 'new-device');
+    discord.enqueueEvents(ids);
+    await discord.flush();
+    assert.equal(sends, 1);
+    assert.equal(discord.history()[0].state, 'failed');
+    assert.equal(discord.history()[0].reason, 'proxy_rejected');
+    assert.equal(discord.history()[0].nextAttemptAt, null);
+    await discord.flush();
+    assert.equal(sends, 1);
+    assert.equal(discord.status().destinationChannel, 'homelab-control');
+  } finally {
+    db.close();
+  }
 });
