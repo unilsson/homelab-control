@@ -192,7 +192,7 @@ export class NetworkNotifications {
   constructor(private readonly db: Database.Database, private readonly options: NotificationOptions) {
     this.channel = options.channel || 'pushover';
     this.tableName = this.channel === 'discord'
-      ? 'network_discord_notification_outbox' : '' + this.tableName + '';
+      ? 'network_discord_notification_outbox' : 'network_notification_outbox';
     this.now = options.now || Date.now;
     this.send = options.send || (this.channel === 'discord'
       ? sendToInternalDiscordProxy : sendToInternalProxy);
@@ -316,7 +316,9 @@ export class NetworkNotifications {
 
   status(): {
     enabled: boolean; configured: boolean; state: 'disabled' | 'ready' | 'error';
-    provider: 'internal_pushover_proxy'; eventTypes: readonly NetworkEventType[];
+    provider: 'internal_pushover_proxy' | 'internal_discord_proxy';
+    channel: NotificationChannel;
+    eventTypes: readonly NetworkEventType[];
     cooldownMinutes: number;
     counts: { pending: number; retry: number; accepted: number; failed: number; suppressed: number };
     lastAttemptAt: string | null; message?: string;
@@ -336,7 +338,8 @@ export class NetworkNotifications {
     return {
       enabled: this.options.enabled, configured: this.validUrl,
       state: !this.options.enabled ? 'disabled' : this.validUrl ? 'ready' : 'error',
-      provider: 'internal_pushover_proxy', eventTypes: this.options.eventTypes,
+      provider: this.channel === 'discord' ? 'internal_discord_proxy' : 'internal_pushover_proxy',
+      channel: this.channel, eventTypes: this.options.eventTypes,
       cooldownMinutes: Math.round(this.options.cooldownMs / 60_000),
       counts: {
         pending: counts.pending ?? 0, retry: counts.retry ?? 0,
