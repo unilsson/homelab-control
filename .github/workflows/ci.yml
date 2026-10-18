@@ -55,6 +55,9 @@ jobs:
           test "$(curl -sS -o /dev/null -w '%{http_code}' 'http://127.0.0.1:3199/api/network/events?limit=10000')" = "400"
           curl -fsS http://127.0.0.1:3199/api/notifications/status | node -e "let b='';process.stdin.on('data',d=>b+=d).on('end',()=>{const x=JSON.parse(b);if(x.state!=='disabled'||x.enabled!==false||x.counts.accepted!==0)process.exit(1)})"
           curl -fsS http://127.0.0.1:3199/api/notifications/history | node -e "let b='';process.stdin.on('data',d=>b+=d).on('end',()=>{if(!Array.isArray(JSON.parse(b)))process.exit(1)})"
+          curl -fsS http://127.0.0.1:3199/api/notifications/discord/status | node -e "let b='';process.stdin.on('data',d=>b+=d).on('end',()=>{const x=JSON.parse(b);if(x.state!=='disabled'||x.channel!=='discord'||x.provider!=='internal_discord_proxy'||x.destinationChannel!=='homelab-control'||x.counts.pending!==0)process.exit(1)})"
+          curl -fsS http://127.0.0.1:3199/api/notifications/discord/history | node -e "let b='';process.stdin.on('data',d=>b+=d).on('end',()=>{if(!Array.isArray(JSON.parse(b)))process.exit(1)})"
+          test "$(curl -sS -o /dev/null -w '%{http_code}' 'http://127.0.0.1:3199/api/notifications/discord/history?limit=1000')" = "400"
           test "$(curl -sS -o /dev/null -w '%{http_code}' 'http://127.0.0.1:3199/api/notifications/history?limit=1000')" = "400"
           curl -fsS http://127.0.0.1:3199/api/integrations/opnsense | node -e "let b='';process.stdin.on('data',d=>b+=d).on('end',()=>{const x=JSON.parse(b);if(x.state!=='disabled'||x.configured!==false||JSON.stringify(x).includes('api_key'))process.exit(1)})"
           # Outside Docker the scanner is disabled, so no scan executes in CI.

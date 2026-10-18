@@ -259,3 +259,9 @@
 .notifications-page .det-info code{color:#e0e7ff;overflow-wrap:anywhere}
 @media(max-width:1000px){.notification-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.notification-config{grid-template-columns:1fr 1fr}}
 @media(max-width:600px){.notification-config{grid-template-columns:1fr}.notification-metric{padding:14px}}
+
+/* Sprint 3E: channel selector reuses the existing Detective navigation style. */
+.notification-channel-tabs{margin-top:-8px;margin-bottom:20px}
+.notification-channel-tabs .det-tab{min-width:130px}
+.notification-channel-tabs .det-tab.active{border-color:#818cf8}
+@media(max-width:600px){.notification-channel-tabs .det-tab{min-width:0}}

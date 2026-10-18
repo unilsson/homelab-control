@@ -7,10 +7,11 @@ import { getOpnsenseStatus } from './integrations/opnsense.js';
 import { readLanInventory } from './integrations/lanscan.js';
 import { getLanScanInfo, requestLanScan, startLanScanner, lanScanner } from './integrations/lanscan-scan.js';
 import { NetworkDetective, normalizeMac } from './network-detective.js';
-import { NetworkNotifications, loadNotificationOptions } from './network-notifications.js';
+import { NetworkNotifications, loadNotificationOptions, loadDiscordNotificationOptions } from './network-notifications.js';
 
 const detective = new NetworkDetective(db);
 const notifications = new NetworkNotifications(db, loadNotificationOptions());
+const discordNotifications = new NetworkNotifications(db, loadDiscordNotificationOptions());
 
 // Recording history and queuing its matching notifications must be ONE
 // SQLite transaction; never queue notifications for failed scans.
@@ -19,12 +20,16 @@ const persistScan = db.transaction((
 ) => {
   const newEvents = detective.recordScan(inventory, scannedAt, scanId);
   notifications.enqueueEvents(newEvents);
+  discordNotifications.enqueueEvents(newEvents);
 });
 lanScanner.setSnapshotObserver((inventory, scannedAt, scanId) => {
   persistScan(inventory, scannedAt, scanId);
   // No network request is made while the SQLite transaction is open.
   void notifications.flush().catch(() =>
-    console.warn('[notifications] Could not process the pending queue.')
+    console.warn('[notifications] Could not process the Pushover queue.')
+  );
+  void discordNotifications.flush().catch(() =>
+    console.warn('[notifications] Could not process the Discord queue.')
   );
 });
 const configuredLan = process.env.LANSCAN_NETWORK?.trim() || '192.168.1.0/24';
@@ -119,6 +124,21 @@ app.get('/api/notifications/history', (req, res) => {
   res.json(notifications.history(limit));
 });
 
+// Sprint 3E: independent Discord channel using the LAN-only Discord Proxy.
+// Read-only: delivery is never triggered by a browser request.
+app.get('/api/notifications/discord/status', (_req, res) => {
+  res.json(discordNotifications.status());
+});
+
+app.get('/api/notifications/discord/history', (req, res) => {
+  const limit = queryLimit(req.query.limit, 50, 100);
+  if (limit === null) {
+    res.status(400).json({ error: 'Invalid limit (1–100).' });
+    return;
+  }
+  res.json(discordNotifications.history(limit));
+});
+
 // Execute a fixed, configured lanscan command with concurrency and cooldown limits.
 // No authentication exists yet: reject cross-site browser requests and rate-limit
 // all manual requests. Keep both web and backend ports restricted to trusted LAN.
@@ -169,3 +189,4 @@ setInterval(() => { void getProxmoxInventory(); }, 60_000).unref();
 // LAN scanning is managed by the backend process, not a separate systemd timer.
 startLanScanner();
 notifications.start();
+discordNotifications.start();

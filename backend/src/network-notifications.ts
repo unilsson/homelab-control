@@ -11,12 +11,15 @@ export const supportedNotificationTypes = [
   'MAC_CHANGED', 'IP_CONFLICT', 'CONFLICT_RESOLVED', 'DHCP_CHANGED'
 ] as const satisfies readonly NetworkEventType[];
 
+export type NotificationChannel = 'pushover' | 'discord';
 export type NotificationState =
   | 'pending' | 'sending' | 'retry' | 'accepted' | 'failed' | 'suppressed';
 export type NotificationTransport = (
-  url: string, message: { title: string; text: string }
+  url: string, message: { title: string; text: string }, discordChannel?: string
 ) => Promise<number>;
 export type NotificationOptions = {
+  channel?: NotificationChannel;
+  discordChannel?: string;
   enabled: boolean;
   proxyUrl: string;
   eventTypes: readonly NetworkEventType[];
@@ -47,8 +50,11 @@ type StateCounts = {
   accepted: number | null; failed: number | null; suppressed: number | null;
 };
 
-const schema = [
-  'CREATE TABLE IF NOT EXISTS network_notification_outbox (',
+function schemaFor(tableName: string): string {
+  const indexPrefix = tableName === 'network_discord_notification_outbox'
+    ? 'network_discord_notification' : 'network_notification';
+  return [
+  'CREATE TABLE IF NOT EXISTS ' + tableName + ' (',
   'id INTEGER PRIMARY KEY AUTOINCREMENT,',
   'event_id INTEGER NOT NULL UNIQUE REFERENCES network_events(id),',
   'dedupe_key TEXT NOT NULL,',
@@ -56,23 +62,25 @@ const schema = [
   'attempts INTEGER NOT NULL DEFAULT 0, reason TEXT,',
   'created_at TEXT NOT NULL, last_attempt_at TEXT,',
   'next_attempt_at TEXT, accepted_at TEXT);',
-  'CREATE INDEX IF NOT EXISTS network_notification_due',
-  'ON network_notification_outbox(state, next_attempt_at, id);',
-  'CREATE INDEX IF NOT EXISTS network_notification_dedupe',
-  'ON network_notification_outbox(dedupe_key, created_at);'
-].join(' ');
+  'CREATE INDEX IF NOT EXISTS ' + indexPrefix + '_due',
+  'ON ' + tableName + '(state, next_attempt_at, id);',
+  'CREATE INDEX IF NOT EXISTS ' + indexPrefix + '_dedupe',
+  'ON ' + tableName + '(dedupe_key, created_at);'
+  ].join(' ');
+}
 
 const retryDelays = [60_000, 2 * 60_000, 5 * 60_000];
 const maxAttempts = retryDelays.length + 1;
 const maxPerScan = 10; // burst protection; suppressed entries are auditable
 const maxPerTenMinutes = 3;
 
-export function validateProxyUrl(value: string): boolean {
+export function validateProxyUrl(value: string, channel: NotificationChannel = 'pushover'): boolean {
   try {
     const url = new URL(value);
     return (url.protocol === 'http:' || url.protocol === 'https:') &&
       Boolean(url.hostname) && !url.username && !url.password &&
-      url.pathname === '/api/pushover/send' && !url.search && !url.hash;
+      url.pathname === (channel === 'discord' ? '/api/discord/send' : '/api/pushover/send') &&
+      !url.search && !url.hash;
   } catch { return false; }
 }
 
@@ -88,6 +96,26 @@ export const sendToInternalProxy: NotificationTransport = async (url, message) =
       signal: controller.signal
     });
     // Never log or store response bodies from the internal service.
+    return response.status;
+  } finally {
+    clearTimeout(timer);
+  }
+};
+
+/** Discord Proxy 1.1+: explicitly select kanal. Neutralize @mentions in LAN hostnames. */
+export const sendToInternalDiscordProxy: NotificationTransport = async (url, message, discordChannel = 'homelab-control') => {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 6_000);
+  try {
+    const response = await fetch(url, {
+      method: 'POST', redirect: 'error',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({
+        text: (message.title + '\n' + message.text).replace(/@/g, '@\u200b'),
+        kanal: discordChannel
+      }),
+      signal: controller.signal
+    });
     return response.status;
   } finally {
     clearTimeout(timer);
@@ -144,20 +172,43 @@ export function loadNotificationOptions(env: NodeJS.ProcessEnv = process.env): N
   };
 }
 
+export function loadDiscordNotificationOptions(env: NodeJS.ProcessEnv = process.env): NotificationOptions {
+  const options = loadNotificationOptions({
+    NETWORK_NOTIFICATIONS_ENABLED: env.NETWORK_DISCORD_NOTIFICATIONS_ENABLED,
+    NETWORK_NOTIFICATIONS_PROXY_URL: env.NETWORK_DISCORD_NOTIFICATIONS_PROXY_URL ||
+      'http://api.ulnihnw.net/api/discord/send',
+    NETWORK_NOTIFICATIONS_EVENT_TYPES: env.NETWORK_DISCORD_NOTIFICATIONS_EVENT_TYPES ??
+      'NEW_DEVICE,IP_CONFLICT',
+    NETWORK_NOTIFICATIONS_COOLDOWN_MINUTES: env.NETWORK_DISCORD_NOTIFICATIONS_COOLDOWN_MINUTES ??
+      '60'
+  });
+  return {
+    ...options,
+    channel: 'discord',
+    discordChannel: env.NETWORK_DISCORD_NOTIFICATIONS_CHANNEL?.trim() || 'homelab-control'
+  };
+}
+
 export class NetworkNotifications {
   private readonly now: () => number;
   private readonly send: NotificationTransport;
   private readonly validUrl: boolean;
+  private readonly channel: NotificationChannel;
+  private readonly tableName: string;
   private busy = false;
 
   constructor(private readonly db: Database.Database, private readonly options: NotificationOptions) {
+    this.channel = options.channel || 'pushover';
+    this.tableName = this.channel === 'discord'
+      ? 'network_discord_notification_outbox' : 'network_notification_outbox';
     this.now = options.now || Date.now;
-    this.send = options.send || sendToInternalProxy;
-    this.validUrl = validateProxyUrl(options.proxyUrl);
-    db.exec(schema);
+    this.send = options.send || (this.channel === 'discord'
+      ? sendToInternalDiscordProxy : sendToInternalProxy);
+    this.validUrl = validateProxyUrl(options.proxyUrl, this.channel);
+    db.exec(schemaFor(this.tableName));
     // Recover interrupted sends after process restart. They can be retried;
     // end-to-end exactly-once delivery cannot be guaranteed by this API.
-    db.prepare("UPDATE network_notification_outbox SET state = 'retry', " +
+    db.prepare("UPDATE " + this.tableName + " SET state = 'retry', " +
       "next_attempt_at = ?, reason = 'interrupted' WHERE state = 'sending'")
       .run(new Date(this.now()).toISOString());
   }
@@ -170,7 +221,7 @@ export class NetworkNotifications {
       'FROM network_events WHERE id = ?'
     );
     const insert = this.db.prepare(
-      'INSERT OR IGNORE INTO network_notification_outbox ' +
+      'INSERT OR IGNORE INTO ' + this.tableName + ' ' +
       '(event_id, dedupe_key, state, reason, created_at, next_attempt_at) VALUES (?, ?, ?, ?, ?, ?)'
     );
     const nowIso = new Date(this.now()).toISOString();
@@ -191,7 +242,7 @@ export class NetworkNotifications {
     for (const event of eligible) {
       const dedupeKey = [event.network, event.type, event.mac || event.ip || 'unknown'].join('|');
       const existing = this.db.prepare(
-        'SELECT 1 FROM network_notification_outbox WHERE dedupe_key = ? ' +
+        'SELECT 1 FROM ' + this.tableName + ' WHERE dedupe_key = ? ' +
         "AND created_at >= ? AND state IN ('pending','sending','retry','accepted') LIMIT 1"
       ).get(dedupeKey, earliest);
       const suppressed = Boolean(existing) || queued >= maxPerScan;
@@ -212,14 +263,14 @@ export class NetworkNotifications {
       const now = this.now();
       const currentIso = new Date(now).toISOString();
       const recent = this.db.prepare(
-        'SELECT COUNT(*) AS n FROM network_notification_outbox WHERE last_attempt_at >= ?'
+        'SELECT COUNT(*) AS n FROM ' + this.tableName + ' WHERE last_attempt_at >= ?'
       ).get(new Date(now - 10 * 60_000).toISOString()) as { n: number };
       if (recent.n >= maxPerTenMinutes) return;
 
       const pending = this.db.prepare(
         'SELECT q.id, q.attempts, e.type, e.network, e.mac, e.ip, ' +
         'e.current_value, e.previous_value, d.hostname, d.display_name ' +
-        'FROM network_notification_outbox q ' +
+        'FROM ' + this.tableName + ' q ' +
         'JOIN network_events e ON e.id = q.event_id ' +
         'LEFT JOIN network_devices d ON d.network = e.network AND d.mac = e.mac ' +
         "WHERE q.state IN ('pending','retry') AND q.next_attempt_at <= ? " +
@@ -229,20 +280,24 @@ export class NetworkNotifications {
 
       const attempts = pending.attempts + 1;
       this.db.prepare(
-        "UPDATE network_notification_outbox SET state = 'sending', attempts = ?, " +
+        "UPDATE " + this.tableName + " SET state = 'sending', attempts = ?, " +
         'last_attempt_at = ?, reason = NULL WHERE id = ?'
       ).run(attempts, currentIso, pending.id);
 
       let code: number | null = null;
       try {
-        code = await this.send(this.options.proxyUrl, buildMessage(pending));
+        code = await this.send(
+          this.options.proxyUrl,
+          buildMessage(pending),
+          this.channel === 'discord' ? (this.options.discordChannel ?? 'homelab-control') : undefined
+        );
       } catch {
         // Network error, timeout, DNS failure. Never expose raw errors.
       }
 
       if (code === 200) {
         this.db.prepare(
-          "UPDATE network_notification_outbox SET state = 'accepted', " +
+          "UPDATE " + this.tableName + " SET state = 'accepted', " +
           'accepted_at = ?, next_attempt_at = NULL WHERE id = ?'
         ).run(new Date(this.now()).toISOString(), pending.id);
       } else {
@@ -253,7 +308,7 @@ export class NetworkNotifications {
           ? 'retry_exhausted' : 'temporarily_unavailable';
         const next = retry ? new Date(this.now() + retryDelays[attempts - 1]).toISOString() : null;
         this.db.prepare(
-          'UPDATE network_notification_outbox SET state = ?, reason = ?, ' +
+          'UPDATE ' + this.tableName + ' SET state = ?, reason = ?, ' +
           'next_attempt_at = ? WHERE id = ?'
         ).run(retry ? 'retry' : 'failed', reason, next, pending.id);
       }
@@ -273,7 +328,10 @@ export class NetworkNotifications {
 
   status(): {
     enabled: boolean; configured: boolean; state: 'disabled' | 'ready' | 'error';
-    provider: 'internal_pushover_proxy'; eventTypes: readonly NetworkEventType[];
+    provider: 'internal_pushover_proxy' | 'internal_discord_proxy';
+    channel: NotificationChannel;
+    destinationChannel?: string;
+    eventTypes: readonly NetworkEventType[];
     cooldownMinutes: number;
     counts: { pending: number; retry: number; accepted: number; failed: number; suppressed: number };
     lastAttemptAt: string | null; message?: string;
@@ -285,15 +343,20 @@ export class NetworkNotifications {
       "SUM(CASE WHEN state = 'accepted' THEN 1 ELSE 0 END) AS accepted, " +
       "SUM(CASE WHEN state = 'failed' THEN 1 ELSE 0 END) AS failed, " +
       "SUM(CASE WHEN state = 'suppressed' THEN 1 ELSE 0 END) AS suppressed " +
-      'FROM network_notification_outbox'
+      'FROM ' + this.tableName + ''
     ).get() as StateCounts;
     const latest = this.db.prepare(
-      'SELECT MAX(last_attempt_at) AS latest FROM network_notification_outbox'
+      'SELECT MAX(last_attempt_at) AS latest FROM ' + this.tableName + ''
     ).get() as { latest: string | null };
     return {
       enabled: this.options.enabled, configured: this.validUrl,
       state: !this.options.enabled ? 'disabled' : this.validUrl ? 'ready' : 'error',
-      provider: 'internal_pushover_proxy', eventTypes: this.options.eventTypes,
+      provider: this.channel === 'discord' ? 'internal_discord_proxy' : 'internal_pushover_proxy',
+      channel: this.channel,
+      ...(this.channel === 'discord'
+        ? { destinationChannel: this.options.discordChannel ?? 'homelab-control' }
+        : {}),
+      eventTypes: this.options.eventTypes,
       cooldownMinutes: Math.round(this.options.cooldownMs / 60_000),
       counts: {
         pending: counts.pending ?? 0, retry: counts.retry ?? 0,
@@ -312,7 +375,7 @@ export class NetworkNotifications {
       'q.state, q.attempts, q.reason, q.created_at AS createdAt, ' +
       'q.last_attempt_at AS lastAttemptAt, q.next_attempt_at AS nextAttemptAt, ' +
       'q.accepted_at AS acceptedAt ' +
-      'FROM network_notification_outbox q JOIN network_events e ON e.id = q.event_id ' +
+      'FROM ' + this.tableName + ' q JOIN network_events e ON e.id = q.event_id ' +
       'ORDER BY q.id DESC LIMIT ?'
     ).all(Math.max(1, Math.min(100, limit))) as NotificationHistory[];
   }
