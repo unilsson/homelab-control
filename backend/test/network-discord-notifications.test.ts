@@ -235,7 +235,7 @@ test('Discord channel alias is passed through the queue and HTTP 400 is not retr
     send: async (url, message, kanal) => {
       assert.equal(url, discordUrl);
       assert.equal(kanal, 'homelab-control');
-      assert.match(message.text, /192\\.168\\.1\\.51/);
+      assert.match(message.text, /192\.168\.1\.51/);
       sends++;
       return 400; // Discord Proxy returns 400 for an unknown kanal alias
     }
