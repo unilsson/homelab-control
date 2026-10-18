@@ -52,9 +52,13 @@ test('Discord proxy transport sends JSON text only, never Discord webhook creden
     assert.equal(url, discordUrl);
     assert.equal(init?.method, 'POST');
     assert.equal(init?.redirect, 'error');
-    assert.deepEqual(JSON.parse(String(init?.body)), {
-      text: 'Homelab Control – Ny enhet\nHändelse: Ny enhet'
-    });
+    const payload = JSON.parse(String(init?.body)) as { text: string };
+    if (calls === 1) {
+      assert.deepEqual(payload, { text: 'Homelab Control – Ny enhet\nHändelse: Ny enhet' });
+    } else {
+      assert.doesNotMatch(payload.text, /@everyone|@here/);
+      assert.match(payload.text, /everyone/);
+    }
     return new Response('{}', { status: 200 });
   };
   try {
@@ -63,6 +67,8 @@ test('Discord proxy transport sends JSON text only, never Discord webhook creden
     });
     assert.equal(code, 200);
     assert.equal(calls, 1);
+    await sendToInternalDiscordProxy(discordUrl, { title: 'Homelab Control', text: 'Host @everyone said @here' });
+    assert.equal(calls, 2);
   } finally {
     globalThis.fetch = original;
   }
