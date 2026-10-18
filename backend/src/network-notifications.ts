@@ -15,10 +15,11 @@ export type NotificationChannel = 'pushover' | 'discord';
 export type NotificationState =
   | 'pending' | 'sending' | 'retry' | 'accepted' | 'failed' | 'suppressed';
 export type NotificationTransport = (
-  url: string, message: { title: string; text: string }
+  url: string, message: { title: string; text: string }, discordChannel?: string
 ) => Promise<number>;
 export type NotificationOptions = {
   channel?: NotificationChannel;
+  discordChannel?: string;
   enabled: boolean;
   proxyUrl: string;
   eventTypes: readonly NetworkEventType[];
@@ -101,15 +102,18 @@ export const sendToInternalProxy: NotificationTransport = async (url, message) =
   }
 };
 
-/** Internal Discord Proxy accepts text only. Neutralize @mentions in untrusted LAN hostnames. */
-export const sendToInternalDiscordProxy: NotificationTransport = async (url, message) => {
+/** Discord Proxy 1.1+: explicitly select kanal. Neutralize @mentions in LAN hostnames. */
+export const sendToInternalDiscordProxy: NotificationTransport = async (url, message, discordChannel = 'homelab-control') => {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 6_000);
   try {
     const response = await fetch(url, {
       method: 'POST', redirect: 'error',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: JSON.stringify({ text: (message.title + '\n' + message.text).replace(/@/g, '@\u200b') }),
+      body: JSON.stringify({
+        text: (message.title + '\n' + message.text).replace(/@/g, '@\u200b'),
+        kanal: discordChannel
+      }),
       signal: controller.signal
     });
     return response.status;
@@ -178,7 +182,11 @@ export function loadDiscordNotificationOptions(env: NodeJS.ProcessEnv = process.
     NETWORK_NOTIFICATIONS_COOLDOWN_MINUTES: env.NETWORK_DISCORD_NOTIFICATIONS_COOLDOWN_MINUTES ??
       '60'
   });
-  return { ...options, channel: 'discord' };
+  return {
+    ...options,
+    channel: 'discord',
+    discordChannel: env.NETWORK_DISCORD_NOTIFICATIONS_CHANNEL?.trim() || 'homelab-control'
+  };
 }
 
 export class NetworkNotifications {
@@ -278,7 +286,11 @@ export class NetworkNotifications {
 
       let code: number | null = null;
       try {
-        code = await this.send(this.options.proxyUrl, buildMessage(pending));
+        code = await this.send(
+          this.options.proxyUrl,
+          buildMessage(pending),
+          this.channel === 'discord' ? (this.options.discordChannel ?? 'homelab-control') : undefined
+        );
       } catch {
         // Network error, timeout, DNS failure. Never expose raw errors.
       }
@@ -318,6 +330,7 @@ export class NetworkNotifications {
     enabled: boolean; configured: boolean; state: 'disabled' | 'ready' | 'error';
     provider: 'internal_pushover_proxy' | 'internal_discord_proxy';
     channel: NotificationChannel;
+    destinationChannel?: string;
     eventTypes: readonly NetworkEventType[];
     cooldownMinutes: number;
     counts: { pending: number; retry: number; accepted: number; failed: number; suppressed: number };
@@ -339,7 +352,11 @@ export class NetworkNotifications {
       enabled: this.options.enabled, configured: this.validUrl,
       state: !this.options.enabled ? 'disabled' : this.validUrl ? 'ready' : 'error',
       provider: this.channel === 'discord' ? 'internal_discord_proxy' : 'internal_pushover_proxy',
-      channel: this.channel, eventTypes: this.options.eventTypes,
+      channel: this.channel,
+      ...(this.channel === 'discord'
+        ? { destinationChannel: this.options.discordChannel ?? 'homelab-control' }
+        : {}),
+      eventTypes: this.options.eventTypes,
       cooldownMinutes: Math.round(this.options.cooldownMs / 60_000),
       counts: {
         pending: counts.pending ?? 0, retry: counts.retry ?? 0,
