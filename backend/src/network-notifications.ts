@@ -101,7 +101,7 @@ export const sendToInternalProxy: NotificationTransport = async (url, message) =
   }
 };
 
-/** Internal Discord Proxy accepts text only; no Discord webhook URL or bot token. */
+/** Internal Discord Proxy accepts text only. Neutralize @mentions in untrusted LAN hostnames. */
 export const sendToInternalDiscordProxy: NotificationTransport = async (url, message) => {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 6_000);
@@ -109,7 +109,7 @@ export const sendToInternalDiscordProxy: NotificationTransport = async (url, mes
     const response = await fetch(url, {
       method: 'POST', redirect: 'error',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: JSON.stringify({ text: message.title + '\n' + message.text }),
+      body: JSON.stringify({ text: (message.title + '\n' + message.text).replace(/@/g, '@\\u200b') }),
       signal: controller.signal
     });
     return response.status;
