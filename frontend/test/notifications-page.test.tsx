@@ -10,6 +10,9 @@ test('notifications page shows disabled-safe, read-only status and history regio
   );
   assert.match(html, /Network notifications/);
   assert.match(html, /Internal Pushover Proxy/);
+  assert.match(html, /aria-pressed="true"[^>]*>Pushover/);
+  assert.match(html, /aria-pressed="false"[^>]*>Discord/);
+  assert.match(html, /Notification delivery channel/);
   assert.match(html, /Loading notification status/);
   assert.match(html, /Waiting \/ retrying/);
   assert.match(html, /Accepted by proxy/);
